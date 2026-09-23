@@ -17,6 +17,11 @@ answer rationales below are author-only material.
 - `fixtures_test.go` validates the shipped files with the application's Go
   `study.LoadDir` and `study.Validate`, and checks within-difficulty pair balance.
 
+The navigation fixtures include material adapted from Prometheus documentation
+under the Apache License 2.0. See the repository's `NOTICE` and
+`LICENSES/Apache-2.0.txt` files for attribution and license terms. The project as
+a whole is licensed under AGPL-3.0-only.
+
 There are four easy, four medium, and four hard tasks. Each session has six
 tasks: two of each difficulty. The six panels expose every task three times and
 every unordered pair within a difficulty exactly once. Cross-difficulty

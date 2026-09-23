@@ -290,4 +290,6 @@ permissions. Screenshots go to `/tmp/opencode/docs-tree-test-browser`. Optional
 environment variables are `TREETEST_TEST_URL`, `CHROME_DEBUG_URL`, and
 `TEST_ARTIFACTS`.
 
-License: Apache-2.0. See [NOTICE](NOTICE) for Prometheus fixture attribution.
+License: [AGPL-3.0-only](LICENSE). The Prometheus navigation fixtures include
+[Apache-2.0](LICENSES/Apache-2.0.txt) material; see [NOTICE](NOTICE) for
+attribution.
