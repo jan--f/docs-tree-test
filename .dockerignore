@@ -1,0 +1,7 @@
+.git
+bin
+data
+backups
+*.sqlite*
+*.db*
+.env

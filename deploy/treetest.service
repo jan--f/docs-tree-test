@@ -1,0 +1,23 @@
+[Unit]
+Description=Documentation tree-test study
+After=network.target
+
+[Service]
+Type=simple
+User=treetest
+Group=treetest
+StateDirectory=treetest
+StateDirectoryMode=0700
+UMask=0077
+WorkingDirectory=/var/lib/treetest
+ExecStart=/usr/local/bin/treetest serve --db /var/lib/treetest/treetest.sqlite --listen 127.0.0.1:8080 --public-url https://study.example.org
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/treetest
+
+[Install]
+WantedBy=multi-user.target
