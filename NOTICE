@@ -1,0 +1,11 @@
+Documentation tree-test application
+
+The Prometheus example navigation fixtures are adapted from:
+Prometheus documentation: content and static site generator
+Copyright 2014-2025 The Prometheus Authors
+
+This product includes software developed at
+SoundCloud Ltd. (http://soundcloud.com/).
+
+Fixture extraction, menu formatting, study tasks and answer mappings are
+adaptations for this experiment. See studies/prometheus/README.md for sources.

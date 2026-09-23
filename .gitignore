@@ -1,0 +1,9 @@
+/bin/
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+/data/
+/backups/
+coverage.out
+.env
