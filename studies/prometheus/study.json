@@ -1,0 +1,277 @@
+{
+  "schema_version": 1,
+  "slug": "prometheus-docs-example",
+  "title": "Finding information in Prometheus documentation",
+  "instructions": "For each situation, browse the documentation menu and select the page where you would expect to find enough information to help. You will see page names, not the articles themselves. You can go back and explore another section before choosing. If you understand the situation but cannot find a suitable page, choose the option to give up. If the situation is unclear to you, choose the option to skip it. Work as you normally would; this is a study of the documentation, not a test of your knowledge.",
+  "tasks_per_session": 6,
+  "variants": [
+    {
+      "id": "current",
+      "name": "Current navigation",
+      "tree": "current.md"
+    },
+    {
+      "id": "candidate",
+      "name": "Proposed navigation",
+      "tree": "candidate.md"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "easy-first-run",
+      "prompt": "You have not run Prometheus before. You want to try it on your own computer and have it collect measurements about itself. Find instructions that explain how to download and run it, including the settings that make it collect those measurements.",
+      "difficulty": "easy",
+      "answers": {
+        "current": [
+          "site-introduction-first-steps",
+          "prometheus-getting-started",
+          "site-tutorials-getting-started"
+        ],
+        "candidate": [
+          "site-introduction-first-steps"
+        ]
+      }
+    },
+    {
+      "id": "easy-variable-value",
+      "prompt": "Your application needs to report how many requests are being handled right now. The number increases when work arrives and decreases when work finishes. Find information that helps you choose the appropriate kind of Prometheus measurement for this value.",
+      "difficulty": "easy",
+      "answers": {
+        "current": [
+          "site-concepts-metric-types",
+          "site-tutorials-understanding-metric-types",
+          "site-practices-instrumentation",
+          "site-instrumenting-writing-clientlibs",
+          "site-instrumenting-writing-exporters",
+          "site-specs-om-open-metrics-spec",
+          "site-specs-om-open-metrics-spec-2-0"
+        ],
+        "candidate": [
+          "site-concepts-metric-types",
+          "site-tutorials-understanding-metric-types",
+          "site-practices-instrumentation",
+          "site-instrumenting-writing-clientlibs",
+          "site-instrumenting-writing-exporters",
+          "site-specs-om-open-metrics-spec",
+          "site-specs-om-open-metrics-spec-2-0"
+        ]
+      }
+    },
+    {
+      "id": "easy-python-package",
+      "prompt": "Your application is written in Python. You want to add your own measurements and make them available to Prometheus. Find documentation that points to a Python package you can use.",
+      "difficulty": "easy",
+      "answers": {
+        "current": [
+          "site-instrumenting-clientlibs",
+          "site-concepts-metric-types",
+          "site-instrumenting-writing-exporters",
+          "site-instrumenting-pushing"
+        ],
+        "candidate": [
+          "site-instrumenting-clientlibs",
+          "site-concepts-metric-types",
+          "site-instrumenting-writing-exporters",
+          "site-instrumenting-pushing"
+        ]
+      }
+    },
+    {
+      "id": "easy-host-measurements",
+      "prompt": "You have a Linux machine and a running Prometheus server. Find instructions for starting a component on that machine and having Prometheus collect operating-system measurements, such as CPU or filesystem usage.",
+      "difficulty": "easy",
+      "answers": {
+        "current": [
+          "site-guides-node-exporter",
+          "site-tutorials-getting-started",
+          "prometheus-getting-started",
+          "site-guides-file-sd"
+        ],
+        "candidate": [
+          "site-guides-node-exporter",
+          "site-guides-file-sd"
+        ]
+      }
+    },
+    {
+      "id": "medium-go-example",
+      "prompt": "You are working on a Go application and want Prometheus to collect a custom measurement from it. Find a worked code example that creates a measurement, updates it, exposes it over HTTP, and shows how Prometheus can collect it.",
+      "difficulty": "medium",
+      "answers": {
+        "current": [
+          "site-guides-go-application",
+          "site-tutorials-instrumenting-http-server-in-go"
+        ],
+        "candidate": [
+          "site-guides-go-application"
+        ]
+      }
+    },
+    {
+      "id": "medium-protect-ui",
+      "prompt": "A Prometheus instance is already running. You want people opening its web interface, or sending requests to its web endpoints, to supply a username and password. Find how to configure Prometheus to require those credentials.",
+      "difficulty": "medium",
+      "answers": {
+        "current": [
+          "site-guides-basic-auth",
+          "prometheus-configuration-https"
+        ],
+        "candidate": [
+          "site-guides-basic-auth",
+          "prometheus-configuration-https"
+        ]
+      }
+    },
+    {
+      "id": "medium-time-range-request",
+      "prompt": "You are writing a program that needs to send a Prometheus expression to the server and retrieve its results at regular intervals between two timestamps. Find the endpoint and request parameters your program should use.",
+      "difficulty": "medium",
+      "answers": {
+        "current": [
+          "prometheus-querying-api"
+        ],
+        "candidate": [
+          "prometheus-querying-api"
+        ]
+      }
+    },
+    {
+      "id": "medium-connect-grafana",
+      "prompt": "Prometheus is collecting data and you already have Grafana running. You want to display that data in Grafana. Find instructions for setting up the connection between the two.",
+      "difficulty": "medium",
+      "answers": {
+        "current": [
+          "site-visualization-grafana",
+          "site-tutorials-visualizing-metrics-using-grafana"
+        ],
+        "candidate": [
+          "site-visualization-grafana",
+          "site-tutorials-visualizing-metrics-using-grafana"
+        ]
+      }
+    },
+    {
+      "id": "hard-rule-behavior",
+      "prompt": "Before deploying changes to your Prometheus rules, you want an automated check using made-up input samples. The check should compare the resulting alerts or expression values with expected results at specified times. Find how to describe and run these checks without relying on live data.",
+      "difficulty": "hard",
+      "answers": {
+        "current": [
+          "prometheus-configuration-unit-testing-rules"
+        ],
+        "candidate": [
+          "prometheus-configuration-unit-testing-rules"
+        ]
+      }
+    },
+    {
+      "id": "hard-delivery-resources",
+      "prompt": "Prometheus is sending samples to an external storage service, but falls behind when that service slows down. Find guidance on improving delivery throughput while understanding how the buffered samples and parallel senders affect memory use.",
+      "difficulty": "hard",
+      "answers": {
+        "current": [
+          "site-practices-remote-write"
+        ],
+        "candidate": [
+          "site-practices-remote-write"
+        ]
+      }
+    },
+    {
+      "id": "hard-team-notifications",
+      "prompt": "Several teams share one Alertmanager. Alerts already carry labels identifying the responsible team and affected service. Find how to set up notifications so each team receives its own alerts and related alerts arrive together.",
+      "difficulty": "hard",
+      "answers": {
+        "current": [
+          "alertmanager-configuration"
+        ],
+        "candidate": [
+          "alertmanager-configuration"
+        ]
+      }
+    },
+    {
+      "id": "hard-service-percentile",
+      "prompt": "Your service runs on several replicas. You need one 95th-percentile response-time value covering requests to all of them over the last five minutes. Find guidance showing how to calculate that value from the collected measurements.",
+      "difficulty": "hard",
+      "answers": {
+        "current": [
+          "site-practices-histograms",
+          "prometheus-querying-functions",
+          "site-specs-native-histograms"
+        ],
+        "candidate": [
+          "site-practices-histograms",
+          "prometheus-querying-functions",
+          "site-specs-native-histograms"
+        ]
+      }
+    }
+  ],
+  "panels": [
+    [
+      "easy-first-run",
+      "medium-go-example",
+      "hard-delivery-resources",
+      "easy-variable-value",
+      "medium-time-range-request",
+      "hard-service-percentile"
+    ],
+    [
+      "medium-protect-ui",
+      "easy-first-run",
+      "hard-rule-behavior",
+      "medium-connect-grafana",
+      "easy-python-package",
+      "hard-delivery-resources"
+    ],
+    [
+      "hard-team-notifications",
+      "easy-host-measurements",
+      "medium-go-example",
+      "hard-service-percentile",
+      "easy-first-run",
+      "medium-protect-ui"
+    ],
+    [
+      "easy-variable-value",
+      "hard-rule-behavior",
+      "medium-time-range-request",
+      "easy-python-package",
+      "hard-service-percentile",
+      "medium-connect-grafana"
+    ],
+    [
+      "medium-connect-grafana",
+      "hard-team-notifications",
+      "easy-variable-value",
+      "medium-go-example",
+      "hard-delivery-resources",
+      "easy-host-measurements"
+    ],
+    [
+      "hard-rule-behavior",
+      "medium-protect-ui",
+      "easy-python-package",
+      "hard-team-notifications",
+      "medium-time-range-request",
+      "easy-host-measurements"
+    ]
+  ],
+  "provenance": {
+    "status": "DRAFT example: review prompts, difficulty assignments, answer keys and pilot results before real publication.",
+    "extracted_on": "2026-09-22",
+    "docs_repository": "https://github.com/prometheus/docs",
+    "current_revision": "1fed0cfef668ede0f52461305d4a52e44f199562",
+    "candidate_ref": "feature/proposed-docs-structure",
+    "candidate_revision": "029b80a42ad22868dbfed338019cafd270fbfbda",
+    "prometheus_version": "3.14",
+    "prometheus_revision": "d7598b7141418fa35be2b5ec5d0fefb634199610",
+    "alertmanager_version": "0.34",
+    "alertmanager_revision": "085f0ef7eb41da24cab8cd000f1345b6250f2edb",
+    "method": "Pinned Git blobs, docs-config.ts source order, frontmatter, candidate docs-routes.ts, fetch script exclusions, nearest-existing-parent hierarchy and stable sortRank order; latest-only projection of LeftNav. See README.md and extract.py.",
+    "scope": "Complete effective documentation menus. Product-version selectors and numbered duplicates of latest excluded; protocol version pages retained. Branch nodes are nonselectable groups; actual menu destination pages are selectable.",
+    "identity": "Content IDs derive from source repository and source-relative Markdown path, never menu label or route. Distinct overlapping articles retain distinct IDs; accepted answers include all reviewed sufficient destinations available in each arm.",
+    "cache_crosscheck": "All 107 candidate latest/local metadata entries matched generated/docs-collection.json in route, source, label, rank, visibility and discovery order. The generated collection was not used for the control or as an extraction input.",
+    "review": "README.md documents all twelve task answer rationales, source sections, alternate destinations and redirect-related asymmetries. Difficulty labels are initial author judgments."
+  }
+}
