@@ -273,16 +273,12 @@ func TestPolicyPublicationIdentityAndUnsupportedDispatch(t *testing.T) {
 		t.Fatalf("future policy was silently reinterpreted: %v", err)
 	}
 	call[map[string]any](t, e.owner, "POST", "/admin/api/runs", map[string]string{"version_id": futureID, "slug": "future-run", "mode": "real"}, 409)
-	legacyID := randomID()
-	if _, err := e.s.db.Exec("INSERT INTO versions(id,hash,title,slug,snapshot_json,scoring_policy,created_at) VALUES(?,?,?,?,?,?,?)", legacyID, contentHash, "Legacy", "legacy", string(data), "old unversioned prose", now()); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := loadSnapshot(context.Background(), e.s.db, legacyID); err == nil || !strings.Contains(err.Error(), "unsupported legacy") {
-		t.Fatalf("legacy policy was silently reinterpreted: %v", err)
+	if _, err := decodePolicy("invalid policy JSON"); err == nil || !strings.Contains(err.Error(), "unsupported frozen policy encoding") {
+		t.Fatalf("invalid policy was accepted: %v", err)
 	}
 	duplicate, err = e.s.Import(fixture())
-	if err != nil || duplicate != e.version || duplicate == legacyID {
-		t.Fatal("bundle-only preview hash collided with policy-aware publication")
+	if err != nil || duplicate != e.version {
+		t.Fatal("unsupported policy changed publication identity")
 	}
 	c := participant(t, e.s)
 	enroll(t, c)

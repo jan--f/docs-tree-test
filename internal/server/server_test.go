@@ -112,8 +112,13 @@ type environment struct {
 
 func setup(t *testing.T) *environment {
 	t.Helper()
+	return setupWithOptions(t, Options{})
+}
+
+func setupWithOptions(t *testing.T, options Options) *environment {
+	t.Helper()
 	db := filepath.Join(t.TempDir(), "study.db")
-	s, err := Open(db, testAssets, testOrigin)
+	s, err := OpenWithOptions(db, testAssets, testOrigin, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -293,9 +298,7 @@ func TestEventsAtomicFinishAndReceipts(t *testing.T) {
 	if !bytes.Equal(first.Body.Bytes(), retry.Body.Bytes()) {
 		t.Fatal("start receipt changed")
 	}
-	if got := startTask(t, c); got.Attempt.ID != a.Attempt.ID {
-		t.Fatal("second start created a second attempt")
-	}
+	call[map[string]any](t, c, "POST", "/api/public/test-run/start", map[string]string{"command_id": "different-start-command", "task_id": prompt.Task.ID}, 409)
 	group, target := a.Tree[0].ID, a.Tree[0].Children[2].ID // duplicate placement of the accepted content
 	call[map[string]any](t, c, "POST", "/api/public/test-run/finish", finishBody(a, "missing-events", "gave_up", "", nil), 422)
 	checkpoint := []Event{event(1, "tree_shown", "", 0, "first"), event(2, "enter", group, 300, "first")}
@@ -625,10 +628,11 @@ func TestOriginCookiesStaticAndStrictRequests(t *testing.T) {
 	}
 	for _, path := range []string{"/", "/admin", "/s/test-run", "/assets/app.js"} {
 		w := newClient(e.s).request("GET", path, nil)
-		if w.Code != 200 || w.Header().Get("X-Content-Type-Options") != "nosniff" || w.Header().Get("Content-Security-Policy") == "" {
+		if w.Code != 200 || w.Header().Get("X-Content-Type-Options") != "nosniff" || w.Header().Get("Content-Security-Policy") == "" || strings.Contains(w.Header().Get("Content-Security-Policy"), "unsafe-inline") {
 			t.Fatalf("static route %s: %d", path, w.Code)
 		}
 	}
+	call[map[string]any](t, newClient(e.s), "GET", "/assets/", nil, 404)
 	c := participant(t, e.s)
 	cookie := c.cookies[participantCookie]
 	if !cookie.HttpOnly || cookie.SameSite != http.SameSiteLaxMode || cookie.Secure {

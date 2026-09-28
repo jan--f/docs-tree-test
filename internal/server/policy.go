@@ -64,7 +64,7 @@ func decodePolicy(data string) (Policy, error) {
 	d := json.NewDecoder(strings.NewReader(data))
 	d.DisallowUnknownFields()
 	if err := d.Decode(&p); err != nil {
-		return p, problem(409, "unsupported legacy frozen policy; republish the source bundle as a new version")
+		return p, problem(409, "unsupported frozen policy encoding")
 	}
 	var extra any
 	if err := d.Decode(&extra); err != io.EOF {

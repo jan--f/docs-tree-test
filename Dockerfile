@@ -1,9 +1,11 @@
-FROM golang:1.25-bookworm AS build
+FROM golang:1.27.1-bookworm AS build
+ARG VERSION=dev
+ARG REVISION=unknown
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /treetest ./cmd/treetest
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${VERSION}+${REVISION}" -o /treetest ./cmd/treetest
 RUN mkdir /data
 
 FROM gcr.io/distroless/static-debian12:nonroot

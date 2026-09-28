@@ -1,12 +1,17 @@
 package server
 
 import (
+	"container/list"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"crypto/subtle"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -14,6 +19,14 @@ import (
 
 const participantCookie = "tree_participant"
 const adminCookie = "tree_admin"
+
+const (
+	minAdminPasswordBytes = 15
+	adminBcryptCost       = 12
+	maxLoginFailures      = 10000
+	loginFailureLifetime  = 24 * time.Hour
+	dummyBcryptCost12     = "$2a$12$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"
+)
 
 type adminIdentity struct {
 	Authenticated bool   `json:"authenticated"`
@@ -24,18 +37,108 @@ type adminIdentity struct {
 
 type identityKey struct{}
 
+type loginFailure struct {
+	failures int
+	until    time.Time
+	touched  time.Time
+	entry    *list.Element
+}
+
+type loginLimiter struct {
+	mu       sync.Mutex
+	failures map[string]*loginFailure
+	order    *list.List
+}
+
+func newLoginLimiter() *loginLimiter {
+	return &loginLimiter{failures: make(map[string]*loginFailure), order: list.New()}
+}
+
+func (l *loginLimiter) key(source, username string) string {
+	return digest(source + "\x00" + strings.ToLower(strings.TrimSpace(username)))
+}
+
+// remove is called with mu held. The list is ordered by the last failure, so
+// expiry and capacity eviction do not scan the whole cache on each login.
+func (l *loginLimiter) remove(key string) {
+	if v := l.failures[key]; v != nil {
+		l.order.Remove(v.entry)
+		delete(l.failures, key)
+	}
+}
+
+func (l *loginLimiter) blocked(source, username string) time.Duration {
+	now := time.Now()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	key := l.key(source, username)
+	v := l.failures[key]
+	if v == nil {
+		return 0
+	}
+	if now.Sub(v.touched) >= loginFailureLifetime {
+		l.remove(key)
+		return 0
+	}
+	if !now.Before(v.until) {
+		return 0
+	}
+	return v.until.Sub(now)
+}
+
+func (l *loginLimiter) failed(source, username string) {
+	now := time.Now()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for oldest := l.order.Front(); oldest != nil; oldest = l.order.Front() {
+		key := oldest.Value.(string)
+		if now.Sub(l.failures[key].touched) < loginFailureLifetime {
+			break
+		}
+		l.remove(key)
+	}
+	key := l.key(source, username)
+	v := l.failures[key]
+	if v == nil {
+		if len(l.failures) >= maxLoginFailures {
+			l.remove(l.order.Front().Value.(string))
+		}
+		v = &loginFailure{entry: l.order.PushBack(key)}
+		l.failures[key] = v
+	} else {
+		l.order.MoveToBack(v.entry)
+	}
+	v.failures++
+	v.touched = now
+	// A bounded delay slows guessing without enabling a permanent-lockout DoS.
+	switch {
+	case v.failures >= 12:
+		v.until = now.Add(15 * time.Minute)
+	case v.failures >= 8:
+		v.until = now.Add(5 * time.Minute)
+	case v.failures >= 5:
+		v.until = now.Add(30 * time.Second)
+	}
+}
+
+func (l *loginLimiter) succeeded(source, username string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.remove(l.key(source, username))
+}
+
 // SetUser creates or replaces a CLI-managed account and revokes its sessions.
 func (s *Server) SetUser(username, password, role string) error {
 	if strings.TrimSpace(username) != username || len(username) < 1 || len(username) > 128 {
 		return errors.New("username must contain 1–128 characters without surrounding whitespace")
 	}
-	if len(password) < 8 || len(password) > 72 {
-		return errors.New("password must contain 8–72 bytes")
+	if len(password) < minAdminPasswordBytes || len(password) > 72 {
+		return errors.New("password must contain 15–72 bytes")
 	}
 	if role != "owner" && role != "analyst" {
 		return errors.New("role must be owner or analyst")
 	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), adminBcryptCost)
 	if err != nil {
 		return err
 	}
@@ -50,7 +153,11 @@ func (s *Server) SetUser(username, password, role string) error {
 	if _, err := tx.Exec("DELETE FROM admin_sessions WHERE username=?", username); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.audit(nil, username, "account.set", "user:"+username, "success")
+	return nil
 }
 
 func (s *Server) cookie(w http.ResponseWriter, name, value string, maxAge int) {
@@ -75,7 +182,15 @@ func anonymous(r *http.Request) (string, error) {
 	if t == "" {
 		return "", problem(401, "open the study to establish an anonymous session")
 	}
-	return digest(t), nil
+	return t, nil
+}
+
+func (s *Server) participantIdentity(runID, participantToken string) string {
+	mac := hmac.New(sha256.New, s.identityKey)
+	_, _ = mac.Write([]byte(runID))
+	_, _ = mac.Write([]byte{0})
+	_, _ = mac.Write([]byte(participantToken))
+	return hex.EncodeToString(mac.Sum(nil))
 }
 
 func (s *Server) admin(r *http.Request) (adminIdentity, error) {
@@ -127,8 +242,26 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) error {
 		Username string `json:"username"`
 		Password string `json:"password"`
 	}
-	if err := decode(w, r, &req); err != nil {
+	if err := decodeLimit(w, r, &req, 8<<10); err != nil {
 		return err
+	}
+	source := s.sourceNetwork(r)
+	if wait, ok := s.limits.allow("admin:login:source:"+source, 30, time.Minute); !ok {
+		s.audit(r, boundedAuditName(req.Username), "login", "admin", "rate_limited")
+		return retryAfter(w, wait)
+	}
+	if len(req.Username) < 1 || len(req.Username) > 128 || strings.TrimSpace(req.Username) != req.Username {
+		s.audit(r, boundedAuditName(req.Username), "login", "admin", "failure")
+		return problem(401, "invalid username or password")
+	}
+	// A suspended source must not spend the account's shared login budget.
+	if wait := s.loginLimits.blocked(source, req.Username); wait > 0 {
+		s.audit(r, boundedAuditName(req.Username), "login", "admin", "rate_limited")
+		return retryAfter(w, wait)
+	}
+	if wait, ok := s.limits.allow("admin:login:account:"+strings.ToLower(strings.TrimSpace(req.Username)), 10, time.Minute); !ok {
+		s.audit(r, boundedAuditName(req.Username), "login", "admin", "rate_limited")
+		return retryAfter(w, wait)
 	}
 	var hash []byte
 	var role string
@@ -138,9 +271,12 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) error {
 	}
 	// Spend the same bcrypt work for unknown users to avoid a username oracle.
 	if err == sql.ErrNoRows {
-		hash = []byte("$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy")
+		hash = []byte(dummyBcryptCost12)
 	}
-	if bcrypt.CompareHashAndPassword(hash, []byte(req.Password)) != nil || role == "" {
+	verified := bcrypt.CompareHashAndPassword(hash, []byte(req.Password)) == nil
+	if !verified || role == "" {
+		s.loginLimits.failed(source, req.Username)
+		s.audit(r, boundedAuditName(req.Username), "login", "admin", "failure")
 		return problem(401, "invalid username or password")
 	}
 	t, csrf, err := s.createAdminSession(r.Context(), req.Username, hash, role, token(r, adminCookie))
@@ -148,6 +284,8 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	s.cookie(w, adminCookie, t, 12*60*60)
+	s.loginLimits.succeeded(source, req.Username)
+	s.audit(r, req.Username, "login", "admin", "success")
 	return respond(w, adminIdentity{true, req.Username, role, csrf})
 }
 
@@ -189,5 +327,6 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	s.cookie(w, adminCookie, "", -1)
+	s.audit(r, adminFromContext(r).Username, "logout", "admin", "success")
 	return respond(w, map[string]bool{"ok": true})
 }

@@ -9,16 +9,18 @@ One Go binary, SQLite, embedded HTML/CSS/vanilla JS. Module `github.com/jan--f/d
 
 ## HTTP conventions
 
-JSON request/response, failures `{error:string}` with non-2xx status. Only same-origin mutations; admin mutations additionally require `X-CSRF-Token`. Login uses origin protection. Never expose variant names, source filenames, content IDs, answer keys or correctness in participant responses. Cookie-derived participant ownership on every API. Secure cookies when public URL is HTTPS. HTML routes `/`, `/s/{slug}`, `/admin`, static `/assets/`.
+JSON request/response, failures `{error:string}` with non-2xx status. Only same-origin mutations; admin mutations additionally require `X-CSRF-Token`. Login uses origin protection, source/account throttling, and bounded progressive delays. Never expose variant names, source filenames, content IDs, answer keys or correctness in participant responses. Cookie-derived participant ownership uses a run-scoped HMAC identity. Secure cookies when public URL is HTTPS. Participant POSTs are rate-limited by source network, run, and participant; responses may return `429` and `Retry-After`. HTML routes `/`, `/s/{slug}`, `/admin`, static `/assets/`.
 
 ### Participant endpoints
 
-- `GET /api/public/{slug}` -> `{title,instructions,mode,status}`; sets anonymous cookie without allocating.
-- `POST /api/public/{slug}/join` `{experience,docs_familiarity}` -> Session. Allocate once per anonymous identity/run, resume existing even if enrollment closed.
+- `GET /api/public/{slug}` -> `{title,instructions,mode,status,recruitment}`; sets anonymous cookie without allocating.
+- `POST /api/public/{slug}/join` `{experience,docs_familiarity,invite_token?}` -> Session. Demographics are optional enums: experience `new|some|regular|extensive`, familiarity `never|occasionally|regularly`. Allocate once per anonymous identity/run, resume existing even if enrollment closed. Invitation-only runs require one unexpired, single-use invitation token for a new session.
 - `GET /api/public/{slug}/session` -> Session, 404 if not enrolled.
-- `POST /api/public/{slug}/start` `{command_id,task_id}` -> Session. Idempotently start the expected public task; reject stale task IDs with 409.
+- `POST /api/public/{slug}/start` `{command_id,task_id}` -> Session. Idempotently start the expected public task; only the original command ID can replay an existing attempt. A different command ID after start is rejected with `409`.
 - `POST /api/public/{slug}/events` `{attempt_id,events}` -> `{next_seq}`.
 - `POST /api/public/{slug}/finish` `{attempt_id,command_id,outcome,node_id?,events}` -> Session. Outcomes `selected`, `gave_up`, `skipped`. Scoring is server-only. Append final events and finalize atomically. Repeated commands return the original response, even after advancing. Invalid/missing events prevent finalization.
+
+Verified start/finish receipt replays count toward source and run rate limits, but do not consume the participant's quota for new commands. Reusing a command ID with a different request is not exempt.
 
 Session shape:
 ```
@@ -29,12 +31,12 @@ Session shape:
 ```
 Task/tree/attempt can be absent on completion. Public node IDs must be opaque. `task_index` is zero-based. An attempt starts on `/start`; the UI can also start then immediately finish a comprehension skip. Events have `{id,seq,type,node_id?,elapsed_ms,epoch,visible?,outcome?}`. Sequence begins at 1; types: `tree_shown`, `enter`, `back`, `root`, `select`, `visibility_hidden`, `visibility_visible`, `resume`, `submit`. `elapsed_ms` is monotonic within a page epoch; never subtract across epochs. Every initial epoch event carries `visible`; resume must not imply foreground visibility. The frontend supplies visibility on all events.
 
-Every finish includes a new terminal `submit` event as the final event. Its outcome and selected node match the finish payload. It captures the confirmation timestamp, is accepted only by `/finish`, and participates in sequence validation so stale tabs cannot silently finalize another tab's stream. A comprehension skip can have a sole `submit` event without a fictitious `tree_shown`. Freeze the finish event and command before network retries; retries replay the same bytes. Store server receipt time. The UI writes an outbox before sending; duplicates with identical payloads are acknowledged, changed duplicates rejected. Attempt.events enables resume navigation. If another tab conflicts, ask to reload rather than merge streams.
+Every finish includes a new terminal `submit` event as the final event. Its outcome and selected node match the finish payload. It captures the confirmation timestamp, is accepted only by `/finish`, and participates in sequence validation so stale tabs cannot silently finalize another tab's stream. A comprehension skip can have a sole `submit` event without a fictitious `tree_shown`. Freeze the finish event and command before network retries; retries replay the same bytes. For large outboxes, freeze at most the final 200 events in the finish command and checkpoint the preceding events in batches of at most 200 before sending it. Compact command receipts expire after 24 hours. The UI writes an outbox before sending; duplicates with identical payloads are acknowledged, changed duplicates rejected. Attempt.events enables resume navigation. If another tab conflicts, ask to reload rather than merge streams. Limits are 200 events/request, 5,000 events/attempt, 1 MiB/attempt, 4 MiB/session, and 128 MiB/run.
 
 ### Admin endpoints
 
 - `GET /admin/api/session` -> `{authenticated,username?,role?,csrf_token?}`.
-- `POST /admin/api/login` `{username,password}` -> same session shape.
+- `POST /admin/api/login` `{username,password}` -> same session shape. Passwords must be 15–72 bytes; bcrypt cost is 12.
 - `POST /admin/api/logout` -> `{ok:true}`.
 - `POST /admin/api/validate` Bundle -> `{hash,content_hash,policy,node_counts:{variant_id:count},task_count,panel_count}`. Owner only. `content_hash` covers the source bundle; publication `hash` includes the frozen policy.
 - `GET /admin/api/drafts` -> `{drafts:[{id,revision,title,updated_at}]}`. Owner only.
@@ -43,9 +45,11 @@ Every finish includes a new terminal `submit` event as the final event. Its outc
 - `PUT /admin/api/drafts/{id}` `{revision,bundle}` -> `{id,revision}`; reject stale revisions with 409. Owner only.
 - `POST /admin/api/drafts/{id}/publish` `{revision}` -> `{id,hash,content_hash,policy}` for frozen version. Owner only.
 - `GET /admin/api/versions` -> `{versions:[{id,hash,content_hash,policy,title,slug,created_at}]}`. Owner only.
-- `POST /admin/api/runs` `{version_id,slug,mode}` -> `{id,slug,version_id,mode,status}`. Mode `pilot` or `real`; initial status `paused`. Owner only.
-- `GET /admin/api/runs` -> `{runs:[{id,slug,version_id,mode,status,created_at}]}`. Both roles. Analysts must not access version bundles, private filenames or semantic tree metadata.
-- `PATCH /admin/api/runs/{id}` `{status}` (`open`,`paused`,`closed`) -> `{ok:true}`. Owner only. Existing participants can finish.
+- `POST /admin/api/runs` `{version_id,slug,mode,enrollment_cap?,recruitment?,retention_days?}` -> run metadata. `enrollment_cap` defaults to 200 (1–10,000); `recruitment` defaults to `public` or can be `invitation`; `retention_days` defaults to 90. Mode `pilot` or `real`; initial status `paused`. Owner only.
+- `GET /admin/api/runs` -> `{runs:[{id,slug,version_id,mode,status,created_at,enrollment_cap,recruitment,retention_days,...}]}`. Both roles. Analysts must not access version bundles, private filenames or semantic tree metadata.
+- Run metadata includes `purge_pending` while database cleanup is incomplete, and `purged_at` once cleanup succeeds. Pending purges cannot reopen enrollment.
+- `PATCH /admin/api/runs/{id}` `{status?,retention_days?}` -> `{ok:true}`. Status is `open`, `paused`, `closed`, or `suspended`. `suspended` rejects every participant write; existing participants can otherwise finish after pause/close. Closing records the closure time and manual-retention target. Retention edits use that closure time, and repeated close requests preserve it. Reopening clears the target; a subsequent closure starts a new period.
+- `POST /admin/api/runs/{id}/invitations` `{expires_in_hours?}` -> `{invite_url,expires_at}`. Invitation runs only; owner only. The token appears in the URL fragment and is returned only at creation.
 - `GET /admin/api/runs/{id}/results` -> `{health:{enrolled,completed,incomplete,last_event_at},arms:[Summary],tasks:[Summary]}`. Both roles, blinded.
 - `GET /admin/api/runs/{id}/export?format=csv|json` -> blinded assigned-task rows, including unreached tasks. Both roles. Schema/denominators described in README.
 - `GET /admin/api/runs/{id}/key` -> mapping + immutable source bundle, owner only.
@@ -57,6 +61,8 @@ Assigned-task exports include server elapsed time, observed foreground duration,
 
 ## Backend embedding interface
 
-`internal/server.Open(dbPath string, assets fs.FS, publicURL string) (*Server,error)` opens/migrates database; `Server` implements `http.Handler`; `Close() error`; `SetUser(username,password,role string) error`; `Import(study.Bundle) (versionID string,error)`; `Backup(path string) error`. `web.Assets` is an embed.FS containing index.html, participant.html, admin.html, assets/*. Server serves fixed HTML files, with JS reading path slugs; do not require template data. Bootstrap and import are CLI-only helper methods; web admin handles ordinary management.
+`internal/server.Open(dbPath string, assets fs.FS, publicURL string) (*Server,error)` initializes an empty database or opens the current schema. Incompatible schemas are rejected and must be recreated; no migrations are provided. `OpenWithOptions(..., Options{IdentityKey: key, TrustedProxies: []string{"172.17.0.1"}})` accepts a production run-scoped-identity key and immediate proxy IPs/CIDRs allowed to supply `X-Forwarded-For` (nil trusts loopback, an empty slice trusts none); `Server` implements `http.Handler`; `Close() error`; `SetUser(username,password,role string) error`; `Import(study.Bundle) (versionID string,error)`; `Backup(path string) error`; `PurgeCandidates`/`PurgeRun` implement the confirmation-protected CLI retention workflow, including retryable SQLite compaction and WAL cleanup. `web.Assets` is an embed.FS containing index.html, participant.html, admin.html, assets/*. Server serves fixed HTML files, with JS reading path slugs; do not require template data. Bootstrap and import are CLI-only helper methods; web admin handles ordinary management.
+
+`treetest identity-key --out ...` generates a new random 32-byte key in a `0600` base64url file without opening a database. Supply it with `--identity-key-file` when first creating the database and on every subsequent open. External keys are never stored in SQLite; only their fingerprints are retained. The identity key and its storage mode are fixed at creation. Changing keys or switching between local and external keys requires recreating the database, even if the key bytes match.
 
 Assigned-task exports retain run/version identifiers, version hash, pilot/real mode, difficulty and policy metadata on every row. Neither authored task IDs nor semantic node paths are part of the blinded export. The owner-only key resolves arm/task codes; detailed events resolve node IDs.

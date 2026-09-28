@@ -14,7 +14,7 @@ opening real enrollment. See [fixture provenance](studies/prometheus/README.md).
 
 ## Quick start
 
-Requires Go 1.25 or newer. The application embeds its frontend; there is no
+Requires Go 1.27.1 or newer. The application embeds its frontend; there is no
 JavaScript build step. One process and a persistent local SQLite file are enough.
 
 ```sh
@@ -25,9 +25,17 @@ go build -trimpath -o bin/treetest ./cmd/treetest
 ./bin/treetest serve --db data/study.sqlite --public-url http://127.0.0.1:8080
 ```
 
+The application initializes the current schema directly. There are no database
+migrations: incompatible development databases must be recreated. Stop the
+application before removing a database and its `-wal`/`-shm` files, then repeat
+account setup and study import. If reusing study link names, also clear the old
+participant progress from the development browser's site storage.
+
 The `user` command prints a generated password. To choose your own, supply
 `--password-file /path/to/password` or the `TREETEST_PASSWORD` environment
 variable. Repeating the command resets that account's credentials.
+Administrator passwords must be 15–72 bytes; use a generated password or a
+password-manager passphrase.
 
 Open **http://127.0.0.1:8080/admin**, log in, create a **pilot** run from the
 imported version, then open enrollment. Share its `/s/{run-slug}` link. Create a
@@ -144,6 +152,48 @@ or move between tasks. Its outbox tolerates interrupted connectivity during a ta
 Clearing cookies or using another browser creates a new identity; an anonymous
 public link cannot prove that every enrollment belongs to a different person.
 
+### Recruitment, limits, and retention
+
+Each run has a hard enrollment cap. Choose either a capped public link or
+**Invitations** when creating the run. Invitation links are random, expire after
+seven days by default, are single-use, and carry their token in the URL fragment
+so browsers do not send it to the server or reverse-proxy access logs. Copy an
+invitation when it is created; it is shown only once.
+
+Participant writes are rate-limited by source network, run, and participant.
+Verified command receipt retries count toward source and run limits but do not
+consume the participant's budget for starting or finishing new tasks.
+Runs also have bounded event counts and event-data budgets (200 events/request,
+5,000 events/attempt, 1 MiB/attempt, 4 MiB/session, and 128 MiB/run). Owners
+can select **Suspend writes** to reject all participant POSTs immediately during
+an abuse investigation. Pausing or closing remains the non-destructive way to
+stop only new enrollment.
+
+The app stores a run-scoped HMAC identity rather than a global participant
+digest. Create production databases with an externally managed 32-byte identity
+key, keeping the secret out of SQLite. The key and its storage mode are fixed at
+database creation; switching from a database-local key to an external key requires
+recreating the database. Runs default to a 90-day retention target when closed;
+the app flags the target but never deletes data automatically. Retention edits
+are anchored to the run's closure time; repeated close requests do not restart that period.
+Reopening a run clears its target, and closing it again starts a new period.
+Review and purge closed-run participant data manually:
+
+```sh
+./bin/treetest purge --db /var/lib/treetest/treetest.sqlite --identity-key-file /var/lib/treetest/identity.key --overdue
+./bin/treetest purge --db /var/lib/treetest/treetest.sqlite --identity-key-file /var/lib/treetest/identity.key --overdue --confirm
+```
+
+The first command is a dry run. `--confirm` permanently deletes sessions,
+demographics, attempts, events, receipts, and invitations for the selected
+closed runs while retaining the frozen study definition and run metadata.
+It wipes deleted SQLite cells, compacts the database, and truncates the WAL.
+A purge is marked complete only after that cleanup succeeds. If another database
+connection blocks cleanup, the run remains closed and pending; retry the printed
+`purge --run ... --confirm` command after that connection releases its transaction.
+`--overdue` also retries pending cleanup. An explicit `--run` can safely repeat
+cleanup for a previously purged closed run.
+
 ## Blinding and results
 
 Participants receive only their assigned tree with opaque node IDs. The public
@@ -219,27 +269,74 @@ the domain root. Example configuration:
 - [Dockerfile](Dockerfile): static Go binary and example studies, non-root runtime.
 
 For systemd, create the service account/state directory, install the binary and
-unit, bootstrap an owner using that account, and edit the domain in the unit and
-Caddyfile. Keep the database outside application release directories. A reverse
-proxy's access logs are separate from the pseudonymous study dataset.
+unit, and edit the domain in the unit and Caddyfile. Generate the identity key and
+bootstrap an owner using that account as shown below. Keep the database outside
+application release directories. The Caddy example emits JSON access logs;
+protect, retain, and review them separately from
+the pseudonymous study dataset. Monitor free disk space, database/WAL size,
+enrollment caps, event-storage budgets, and abnormal request rates.
 
-Container example (initialize the bind mount for UID/GID 65532):
+The application emits JSON audit records for login outcomes, account changes,
+publication, run/invitation changes, and sensitive exports. Records contain a
+timestamp, request ID, source network, actor, action, object, and outcome; they
+intentionally omit passwords, cookies, CSRF tokens, source bundles, answer keys,
+and participant responses. Send stdout/journald logs to protected central
+storage and define a retention/review process, including alerts for repeated
+login failures, unusual successful logins, and enrollment/storage spikes.
+
+Generate a new participant identity key as the service account before creating
+the production database, then pass it to every command that opens that database:
+
+```sh
+umask 077
+./bin/treetest identity-key --out /var/lib/treetest/identity.key
+./bin/treetest user --db /var/lib/treetest/treetest.sqlite --identity-key-file /var/lib/treetest/identity.key --username owner
+./bin/treetest import --db /var/lib/treetest/treetest.sqlite --identity-key-file /var/lib/treetest/identity.key --study studies/prometheus
+./bin/treetest serve --db /var/lib/treetest/treetest.sqlite \
+  --identity-key-file /var/lib/treetest/identity.key \
+  --listen 127.0.0.1:8080 --public-url https://study.example.org
+```
+
+The `identity-key` command creates a new random key in a `0600` file, never
+overwrites an existing file, and does not open a database. An external-key database
+stores only a fingerprint and requires the original key on every subsequent open,
+including backup and restore. Keep the key with your protected backups so restored
+enrollments remain usable. Changing the key or switching key storage modes requires
+recreating the database; exporting or converting a database-local key is not supported.
+
+Without this option, a new database uses a database-local development key and
+emits a warning. Keep `/admin` behind a VPN, identity-aware proxy, or IP allowlist
+where practical; use MFA or an upstream identity provider for Internet-facing
+administration.
+
+The backend trusts forwarded client addresses only from `--trusted-proxies`
+(comma-separated IPs/CIDRs, loopback by default; an empty value trusts none).
+Configure the immediate proxy address, and have that proxy overwrite
+`X-Forwarded-For` as the supplied Caddyfile does. For host Caddy connecting through
+Docker's default bridge, use its gateway address as below. Custom networks need
+their own immediate proxy address.
+
+Container example (initialize a new bind mount for UID/GID 65532):
 
 ```sh
 docker build -t docs-tree-test .
+proxy_ip=$(docker network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}')
+umask 077
 mkdir -p data
 sudo chown 65532:65532 data
-docker run --rm -v "$PWD/data:/data" docs-tree-test user --db /data/study.sqlite --username owner
-docker run --rm -v "$PWD/data:/data" docs-tree-test import --db /data/study.sqlite --study /studies/prometheus
+docker run --rm -v "$PWD/data:/data" docs-tree-test identity-key --out /data/identity.key
+docker run --rm -v "$PWD/data:/data" docs-tree-test user --db /data/study.sqlite --identity-key-file /data/identity.key --username owner
+docker run --rm -v "$PWD/data:/data" docs-tree-test import --db /data/study.sqlite --identity-key-file /data/identity.key --study /studies/prometheus
 docker run -d --name treetest --restart unless-stopped \
   -p 127.0.0.1:8080:8080 -v "$PWD/data:/data" docs-tree-test \
-  serve --db /data/study.sqlite --listen 0.0.0.0:8080 --public-url https://study.example.org
+  serve --db /data/study.sqlite --identity-key-file /data/identity.key \
+  --trusted-proxies "$proxy_ip" --listen 0.0.0.0:8080 --public-url https://study.example.org
 ```
 
 ### Backups and restore
 
 ```sh
-./bin/treetest backup --db /var/lib/treetest/treetest.sqlite --out /secure/backups/study-2026-09-22.sqlite
+./bin/treetest backup --db /var/lib/treetest/treetest.sqlite --identity-key-file /var/lib/treetest/identity.key --out /secure/backups/study-2026-09-22.sqlite
 ```
 
 The command creates a consistent SQLite backup, including committed data that is
@@ -248,12 +345,15 @@ To restore, stop the service, retain the old database and its `-wal`/`-shm` file
 together, place the backup at the configured database path with service-account
 ownership, and restart. Do not mix an old WAL with a restored database. Rehearse
 restore with a copied backup and confirm the expected study versions and counts.
+The manual retention purge does not remove historical backups or service/access
+logs; expire those copies through the backup and log-retention systems as well.
 
 ## Development
 
 ```sh
 CGO_ENABLED=1 go test -race ./...
 go vet ./...
+go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 node --test web/tests/*.test.mjs
 CGO_ENABLED=0 go build -trimpath -o bin/treetest ./cmd/treetest
 ```

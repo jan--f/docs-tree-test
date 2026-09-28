@@ -5,7 +5,9 @@ const app = document.getElementById('app');
 let slug;
 try { slug = decodeURIComponent(location.pathname.split('/')[2] || ''); } catch { slug = ''; }
 const base = `/api/public/${encodeURIComponent(slug)}`;
+const invitation = new URLSearchParams((location.hash || '').slice(1)).get('invite') || '';
 const storageKey = `tree-study:v1:${slug}`;
+const maxEventBatch = 200;
 const epoch = uuid();
 const epochStart = performance.now();
 let lastElapsed = 0;
@@ -89,18 +91,15 @@ async function flush(keepalive = false) {
   if (flushPromise) return flushPromise;
   if (!active || blocked || saved.finishCommand || !saved.events?.length) return;
   const attemptID = saved.attemptId;
-  // Terminal events are committed only by /finish, never by a checkpoint.
-  const batch = saved.events.filter(event => event.type !== 'submit').map(event => ({...event}));
-  if (!batch.length) return;
   setSaveMessage('Saving…');
   flushPromise = (async () => {
     try {
-      const response = await api(`${base}/events`, {method: 'POST', body: {attempt_id: attemptID, events: batch}, keepalive});
-      if (saved.attemptId !== attemptID) throw new SequenceConflict();
-      // Only this snapshot was sent; a higher acknowledgment is another writer.
-      ackEvents(batch, response.next_seq);
-      saved.events = ackEvents(saved.events, response.next_seq);
-      persist();
+      while (active && !blocked && !saved.finishCommand) {
+        // Terminal events are committed only by /finish, never by a checkpoint.
+        const batch = saved.events.filter(event => event.type !== 'submit').slice(0, maxEventBatch).map(event => ({...event}));
+        if (!batch.length) break;
+        await checkpoint(attemptID, batch, keepalive);
+      }
       setSaveMessage(saved.events.length ? 'Saved on this device' : 'Progress saved');
     } catch (error) {
       setSaveMessage('Saved on this device · not synced');
@@ -108,6 +107,28 @@ async function flush(keepalive = false) {
     } finally { flushPromise = null; }
   })();
   return flushPromise;
+}
+
+async function checkpoint(attemptID, batch, keepalive = false) {
+  const response = await api(`${base}/events`, {method: 'POST', body: {attempt_id: attemptID, events: batch}, keepalive});
+  if (saved.attemptId !== attemptID) throw new SequenceConflict();
+  // Only this snapshot was sent; a higher acknowledgment is another writer.
+  if (ackEvents(batch, response.next_seq).length) throw new SequenceConflict();
+  saved.events = ackEvents(saved.events, response.next_seq);
+  persist();
+}
+
+async function sendFinish() {
+  const command = saved.finishCommand;
+  while (true) {
+    if (blocked) throw new SequenceConflict();
+    if (!saved.events.some(event => event.seq < command.events[0].seq)) break;
+    // Include a whole checkpoint batch, even if it overlaps the frozen tail:
+    // an in-flight checkpoint crossing that boundary may have lost its reply.
+    const batch = saved.events.filter(event => event.type !== 'submit').slice(0, maxEventBatch).map(event => ({...event}));
+    await checkpoint(command.attempt_id, batch);
+  }
+  return api(`${base}/finish`, {method: 'POST', body: command});
 }
 
 async function retrySync() {
@@ -147,7 +168,8 @@ async function join() {
   clearNotice();
   renderLanding();
   try {
-    const value = await api(`${base}/join`, {method: 'POST', body: {experience, docs_familiarity: familiarity}});
+    const value = await api(`${base}/join`, {method: 'POST', body: {experience, docs_familiarity: familiarity, ...(invitation ? {invite_token: invitation} : {})}});
+    if (invitation) history.replaceState(null, '', location.pathname);
     acceptSession(value, {resuming: true});
     busy = false;
     render();
@@ -195,7 +217,7 @@ async function finish(outcome, nodeId, submission) {
       const terminal = makeEvent('submit', outcome === 'selected' ? nodeId : undefined, outcome, stamp);
       saved.events.push(terminal);
       saved.nextSeq += 1;
-      const command = {attempt_id: session.attempt.id, command_id: uuid(), outcome, events: saved.events.map(event => ({...event}))};
+      const command = {attempt_id: session.attempt.id, command_id: uuid(), outcome, events: saved.events.slice(-maxEventBatch).map(event => ({...event}))};
       if (outcome === 'selected') command.node_id = nodeId;
       saved.finishCommand = command;
       delete saved.startCommand;
@@ -206,13 +228,13 @@ async function finish(outcome, nodeId, submission) {
     active = false;
     render();
     // A checkpoint acknowledgment may prune the live outbox, but must never
-    // change the frozen command. Its already-sent prefix is safe to duplicate
-    // atomically in /finish, including after a lost checkpoint response.
+    // change the frozen command. Any earlier outbox prefix is checkpointed in
+    // bounded batches before the immutable terminal batch is sent to /finish.
     if (flushPromise) {
       try { await flushPromise; } catch (error) { if (error.status === 409 || error instanceof SequenceConflict) throw error; }
     }
     if (blocked) throw new SequenceConflict();
-    const value = await api(`${base}/finish`, {method: 'POST', body: saved.finishCommand});
+    const value = await sendFinish();
     // Acknowledgment is the only point at which the task and command advance.
     saved = {sessionId: value.id, events: []};
     persist();
@@ -241,7 +263,7 @@ async function requestGiveUp() {
 
 function progress() {
   const current = session.completed ? session.total_tasks : session.task_index;
-  return el('div', {}, el('div', {class: 'progress-heading'}, el('span', {}, session.completed ? 'Study complete' : `Task ${session.task_index + 1} of ${session.total_tasks}`), el('span', {}, `${current} completed`)), el('div', {class: 'progress-track', role: 'progressbar', 'aria-label': 'Tasks completed', 'aria-valuemin': 0, 'aria-valuemax': session.total_tasks, 'aria-valuenow': current}, el('div', {class: 'progress-fill', style: `width:${session.total_tasks ? current / session.total_tasks * 100 : 0}%`} )));
+  return el('div', {}, el('div', {class: 'progress-heading'}, el('span', {}, session.completed ? 'Study complete' : `Task ${session.task_index + 1} of ${session.total_tasks}`), el('span', {}, `${current} completed`)), el('progress', {class: 'progress-track', 'aria-label': 'Tasks completed', value: current, max: session.total_tasks}));
 }
 
 function renderLanding() {
@@ -259,6 +281,7 @@ function renderLanding() {
       el('li', {}, 'Choose the page where you would expect to find the answer, then confirm your choice. You can also say you can’t find it or skip an unclear task.')),
     el('div', {class: 'inline-note'}, el('span', {class: 'note-icon', 'aria-hidden': 'true'}, '↳'), el('div', {}, el('h2', {}, 'Try the controls first'), el('p', {}, 'A short, unrelated library example. Practice stays in your browser and is not part of your study responses.'), button('Open practice', () => renderPractice(), 'secondary', {disabled: busy}))),
     available ? el('form', {onsubmit: event => { event.preventDefault(); if (!busy) join(); }},
+      study.recruitment === 'invitation' && el('div', {class: 'message'}, invitation ? 'Your invitation will be used when you begin. It is single-use.' : 'This study requires the invitation link shared with you.'),
       el('div', {class: 'card'}, el('h2', {}, 'A little context · optional'), el('p', {class: 'help'}, 'You can leave either question unanswered.'),
         el('div', {class: 'field-grid'}, field('Your experience with this subject', select('experience', [['', 'Prefer not to answer'], ['new', 'I’m new to it'], ['some', 'Some experience'], ['regular', 'I use it regularly'], ['extensive', 'Extensive experience']], experience, event => { experience = event.target.value; })),
           field('Familiarity with these docs', select('familiarity', [['', 'Prefer not to answer'], ['never', 'I haven’t used them'], ['occasionally', 'I use them occasionally'], ['regularly', 'I use them regularly']], familiarity, event => { familiarity = event.target.value; })))),
@@ -368,7 +391,15 @@ async function init() {
     } else {
       session = value;
       if (saved.sessionId && saved.sessionId !== value.id) throw new SequenceConflict();
-      if (saved.finishCommand) await finish(saved.finishCommand.outcome, saved.finishCommand.node_id);
+      if (saved.finishCommand) {
+        if (value.attempt?.id === saved.finishCommand.attempt_id) {
+          // A prefix checkpoint may have committed just before a lost response.
+          // Reconcile that outbox without changing the frozen finish request.
+          saved.events = reconcileEvents(value.attempt.events || [], saved.events || [], value.attempt.next_seq).pending;
+          persist();
+        }
+        await finish(saved.finishCommand.outcome, saved.finishCommand.node_id);
+      }
       else if (saved.startCommand) await start(saved.startCommand.skip);
       else { acceptSession(value, {resuming: true}); render(); }
     }

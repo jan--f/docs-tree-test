@@ -108,7 +108,7 @@ func TestPrometheusStudyEndToEnd(t *testing.T) {
 	request("PATCH", "/admin/api/runs/"+runID, map[string]string{"status": "open"})
 	request("GET", "/s/integration-pilot", nil)
 	request("GET", "/api/public/integration-pilot", nil)
-	state := decode(request("POST", "/api/public/integration-pilot/join", map[string]string{"experience": "regular", "docs_familiarity": "some"}))
+	state := decode(request("POST", "/api/public/integration-pilot/join", map[string]string{"experience": "regular", "docs_familiarity": "regularly"}))
 	for index := 0; index < 6; index++ {
 		if state["completed"] == true || int(state["task_index"].(float64)) != index {
 			t.Fatalf("unexpected progress: %#v", state)

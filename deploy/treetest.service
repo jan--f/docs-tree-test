@@ -10,13 +10,24 @@ StateDirectory=treetest
 StateDirectoryMode=0700
 UMask=0077
 WorkingDirectory=/var/lib/treetest
-ExecStart=/usr/local/bin/treetest serve --db /var/lib/treetest/treetest.sqlite --listen 127.0.0.1:8080 --public-url https://study.example.org
+ExecStart=/usr/local/bin/treetest serve --db /var/lib/treetest/treetest.sqlite --identity-key-file /var/lib/treetest/identity.key --listen 127.0.0.1:8080 --public-url https://study.example.org
 Restart=on-failure
 RestartSec=3
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectClock=true
+PrivateDevices=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
 ReadWritePaths=/var/lib/treetest
 
 [Install]

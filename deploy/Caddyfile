@@ -1,4 +1,20 @@
+{
+	log {
+		output stdout
+		format json
+	}
+}
+
 study.example.org {
-	reverse_proxy 127.0.0.1:8080
+	log {
+		format filter {
+			request>headers>X-Csrf-Token delete
+			wrap json
+		}
+	}
+	reverse_proxy 127.0.0.1:8080 {
+		# Overwrite client input before the backend's configured proxy trusts it.
+		header_up X-Forwarded-For {remote_host}
+	}
 	header Strict-Transport-Security "max-age=31536000"
 }

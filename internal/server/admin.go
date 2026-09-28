@@ -9,20 +9,29 @@ import (
 	"math/big"
 	"net/http"
 	"regexp"
+	"time"
 
 	"github.com/jan--f/docs-tree-test/internal/study"
 )
 
 type run struct {
-	ID         string            `json:"id"`
-	Slug       string            `json:"slug"`
-	VersionID  string            `json:"version_id"`
-	Mode       string            `json:"mode"`
-	Status     string            `json:"status"`
-	CreatedAt  string            `json:"created_at"`
-	Arms       map[string]string `json:"-"`
-	Tasks      map[string]string `json:"-"`
-	Allocation []allocation      `json:"-"`
+	ID              string            `json:"id"`
+	Slug            string            `json:"slug"`
+	VersionID       string            `json:"version_id"`
+	Mode            string            `json:"mode"`
+	Status          string            `json:"status"`
+	CreatedAt       string            `json:"created_at"`
+	EnrollmentCap   int               `json:"enrollment_cap"`
+	Recruitment     string            `json:"recruitment"`
+	RetentionDays   int               `json:"retention_days"`
+	RetentionTarget *string           `json:"retention_target_at,omitempty"`
+	PurgedAt        *string           `json:"purged_at,omitempty"`
+	PurgePending    bool              `json:"purge_pending,omitempty"`
+	EventBytes      int64             `json:"event_bytes"`
+	DataBytes       int64             `json:"data_bytes"`
+	Arms            map[string]string `json:"-"`
+	Tasks           map[string]string `json:"-"`
+	Allocation      []allocation      `json:"-"`
 }
 
 type allocation struct {
@@ -34,12 +43,23 @@ func loadRun(ctx context.Context, q querier, column, value string) (*run, error)
 	var a run
 	var arms, tasks, alloc string
 	// column is an internal constant, never request input.
-	err := q.QueryRowContext(ctx, "SELECT id,slug,version_id,mode,status,created_at,arms_json,tasks_json,allocation_json FROM runs WHERE "+column+"=?", value).Scan(&a.ID, &a.Slug, &a.VersionID, &a.Mode, &a.Status, &a.CreatedAt, &arms, &tasks, &alloc)
+	var suspended bool
+	var retentionTarget, purgedAt sql.NullString
+	err := q.QueryRowContext(ctx, "SELECT id,slug,version_id,mode,status,created_at,arms_json,tasks_json,allocation_json,write_suspended,enrollment_cap,recruitment,retention_days,retention_target_at,purged_at,event_bytes,data_bytes,purge_pending FROM runs WHERE "+column+"=?", value).Scan(&a.ID, &a.Slug, &a.VersionID, &a.Mode, &a.Status, &a.CreatedAt, &arms, &tasks, &alloc, &suspended, &a.EnrollmentCap, &a.Recruitment, &a.RetentionDays, &retentionTarget, &purgedAt, &a.EventBytes, &a.DataBytes, &a.PurgePending)
 	if err == sql.ErrNoRows {
 		return nil, problem(404, "run not found")
 	}
 	if err != nil {
 		return nil, err
+	}
+	if suspended {
+		a.Status = "suspended"
+	}
+	if retentionTarget.Valid {
+		a.RetentionTarget = &retentionTarget.String
+	}
+	if purgedAt.Valid {
+		a.PurgedAt = &purgedAt.String
 	}
 	for _, item := range []struct {
 		data string
@@ -128,6 +148,7 @@ func (s *Server) createDraft(w http.ResponseWriter, r *http.Request) error {
 	if _, err := s.db.ExecContext(r.Context(), "INSERT INTO drafts(id,revision,title,bundle_json,updated_at) VALUES(?,1,?,?,?)", id, b.Config.Title, string(data), now()); err != nil {
 		return err
 	}
+	s.audit(r, adminFromContext(r).Username, "draft.create", "draft:"+id, "success")
 	return respond(w, map[string]any{"id": id, "revision": 1})
 }
 
@@ -180,6 +201,7 @@ func (s *Server) updateDraft(w http.ResponseWriter, r *http.Request) error {
 	if err := tx.Commit(); err != nil {
 		return err
 	}
+	s.audit(r, adminFromContext(r).Username, "draft.update", "draft:"+id, "success")
 	return respond(w, map[string]any{"id": id, "revision": revision + 1})
 }
 
@@ -222,6 +244,7 @@ func (s *Server) publish(w http.ResponseWriter, r *http.Request) error {
 	if err := tx.Commit(); err != nil {
 		return err
 	}
+	s.audit(r, adminFromContext(r).Username, "version.publish", "version:"+id, "success")
 	return respond(w, map[string]any{"id": id, "hash": publicationHash(snapshot.Hash, currentPolicy()), "content_hash": snapshot.Hash, "policy": currentPolicy()})
 }
 
@@ -263,9 +286,12 @@ var slugPattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 
 func (s *Server) createRun(w http.ResponseWriter, r *http.Request) error {
 	var req struct {
-		VersionID string `json:"version_id"`
-		Slug      string `json:"slug"`
-		Mode      string `json:"mode"`
+		VersionID     string `json:"version_id"`
+		Slug          string `json:"slug"`
+		Mode          string `json:"mode"`
+		EnrollmentCap int    `json:"enrollment_cap,omitempty"`
+		Recruitment   string `json:"recruitment,omitempty"`
+		RetentionDays int    `json:"retention_days,omitempty"`
 	}
 	if err := decode(w, r, &req); err != nil {
 		return err
@@ -275,6 +301,24 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) error {
 	}
 	if req.Mode != "pilot" && req.Mode != "real" {
 		return problem(422, "mode must be pilot or real")
+	}
+	if req.EnrollmentCap == 0 {
+		req.EnrollmentCap = 200
+	}
+	if req.EnrollmentCap < 1 || req.EnrollmentCap > 10000 {
+		return problem(422, "enrollment_cap must be between 1 and 10000")
+	}
+	if req.Recruitment == "" {
+		req.Recruitment = "public"
+	}
+	if req.Recruitment != "public" && req.Recruitment != "invitation" {
+		return problem(422, "recruitment must be public or invitation")
+	}
+	if req.RetentionDays == 0 {
+		req.RetentionDays = 90
+	}
+	if req.RetentionDays < 1 || req.RetentionDays > 3650 {
+		return problem(422, "retention_days must be between 1 and 3650")
 	}
 	tx, err := s.db.BeginTx(r.Context(), nil)
 	if err != nil {
@@ -311,18 +355,19 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	a := run{ID: randomID(), Slug: req.Slug, VersionID: req.VersionID, Mode: req.Mode, Status: "paused", CreatedAt: now()}
-	if _, err := tx.ExecContext(r.Context(), "INSERT INTO runs(id,slug,version_id,mode,status,created_at,arms_json,tasks_json) VALUES(?,?,?,?,?,?,?,?)", a.ID, a.Slug, a.VersionID, a.Mode, a.Status, a.CreatedAt, string(armsJSON), string(tasksJSON)); err != nil {
+	a := run{ID: randomID(), Slug: req.Slug, VersionID: req.VersionID, Mode: req.Mode, Status: "paused", CreatedAt: now(), EnrollmentCap: req.EnrollmentCap, Recruitment: req.Recruitment, RetentionDays: req.RetentionDays}
+	if _, err := tx.ExecContext(r.Context(), "INSERT INTO runs(id,slug,version_id,mode,status,created_at,arms_json,tasks_json,enrollment_cap,recruitment,retention_days) VALUES(?,?,?,?,?,?,?,?,?,?,?)", a.ID, a.Slug, a.VersionID, a.Mode, a.Status, a.CreatedAt, string(armsJSON), string(tasksJSON), a.EnrollmentCap, a.Recruitment, a.RetentionDays); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return err
 	}
-	return respond(w, map[string]string{"id": a.ID, "slug": a.Slug, "version_id": a.VersionID, "mode": a.Mode, "status": a.Status})
+	s.audit(r, adminFromContext(r).Username, "run.create", "run:"+a.ID, "success")
+	return respond(w, a)
 }
 
 func (s *Server) listRuns(w http.ResponseWriter, r *http.Request) error {
-	rows, err := s.db.QueryContext(r.Context(), "SELECT id,slug,version_id,mode,status,created_at FROM runs ORDER BY created_at DESC,id")
+	rows, err := s.db.QueryContext(r.Context(), "SELECT id,slug,version_id,mode,status,created_at,write_suspended,enrollment_cap,recruitment,retention_days,retention_target_at,purged_at,event_bytes,data_bytes,purge_pending FROM runs ORDER BY created_at DESC,id")
 	if err != nil {
 		return err
 	}
@@ -330,8 +375,19 @@ func (s *Server) listRuns(w http.ResponseWriter, r *http.Request) error {
 	runs := []run{}
 	for rows.Next() {
 		var a run
-		if err := rows.Scan(&a.ID, &a.Slug, &a.VersionID, &a.Mode, &a.Status, &a.CreatedAt); err != nil {
+		var suspended bool
+		var retentionTarget, purgedAt sql.NullString
+		if err := rows.Scan(&a.ID, &a.Slug, &a.VersionID, &a.Mode, &a.Status, &a.CreatedAt, &suspended, &a.EnrollmentCap, &a.Recruitment, &a.RetentionDays, &retentionTarget, &purgedAt, &a.EventBytes, &a.DataBytes, &a.PurgePending); err != nil {
 			return err
+		}
+		if suspended {
+			a.Status = "suspended"
+		}
+		if retentionTarget.Valid {
+			a.RetentionTarget = &retentionTarget.String
+		}
+		if purgedAt.Valid {
+			a.PurgedAt = &purgedAt.String
 		}
 		runs = append(runs, a)
 	}
@@ -343,25 +399,76 @@ func (s *Server) listRuns(w http.ResponseWriter, r *http.Request) error {
 
 func (s *Server) updateRun(w http.ResponseWriter, r *http.Request) error {
 	var req struct {
-		Status string `json:"status"`
+		Status        string `json:"status,omitempty"`
+		RetentionDays int    `json:"retention_days,omitempty"`
 	}
 	if err := decode(w, r, &req); err != nil {
 		return err
 	}
-	if req.Status != "open" && req.Status != "paused" && req.Status != "closed" {
-		return problem(422, "status must be open, paused or closed")
+	if req.Status == "" && req.RetentionDays == 0 {
+		return problem(422, "status or retention_days is required")
 	}
-	res, err := s.db.ExecContext(r.Context(), "UPDATE runs SET status=? WHERE id=?", req.Status, r.PathValue("id"))
+	if req.Status != "" && req.Status != "open" && req.Status != "paused" && req.Status != "closed" && req.Status != "suspended" {
+		return problem(422, "status must be open, paused, closed or suspended")
+	}
+	if req.RetentionDays != 0 && (req.RetentionDays < 1 || req.RetentionDays > 3650) {
+		return problem(422, "retention_days must be between 1 and 3650")
+	}
+	tx, err := s.db.BeginTx(r.Context(), nil)
 	if err != nil {
 		return err
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if n == 0 {
+	defer tx.Rollback()
+	var currentStatus string
+	var currentlySuspended bool
+	var retentionDays int
+	var purgedAt, closedAt, retentionTarget sql.NullString
+	var purgePending bool
+	err = tx.QueryRowContext(r.Context(), "SELECT status,write_suspended,retention_days,purged_at,purge_pending,closed_at,retention_target_at FROM runs WHERE id=?", r.PathValue("id")).Scan(&currentStatus, &currentlySuspended, &retentionDays, &purgedAt, &purgePending, &closedAt, &retentionTarget)
+	if err == sql.ErrNoRows {
 		return problem(404, "run not found")
 	}
+	if err != nil {
+		return err
+	}
+	if purgedAt.Valid && req.Status == "open" {
+		return problem(409, "a purged run cannot be reopened")
+	}
+	if purgePending && req.Status != "" && req.Status != "closed" && req.Status != "suspended" {
+		return problem(409, "a run awaiting purge cleanup must remain closed")
+	}
+	if req.RetentionDays != 0 {
+		retentionDays = req.RetentionDays
+	}
+	status, suspended := currentStatus, currentlySuspended
+	if req.Status == "suspended" {
+		suspended = true
+	} else if req.Status != "" {
+		status = req.Status
+		suspended = false
+	}
+	if status != "closed" {
+		closedAt, retentionTarget = sql.NullString{}, sql.NullString{}
+	} else {
+		if currentStatus != "closed" || !closedAt.Valid {
+			closedAt = sql.NullString{String: now(), Valid: true}
+			retentionTarget = sql.NullString{}
+		}
+		if req.RetentionDays != 0 || !retentionTarget.Valid {
+			closed, err := time.Parse(time.RFC3339Nano, closedAt.String)
+			if err != nil {
+				return err
+			}
+			retentionTarget = sql.NullString{String: closed.AddDate(0, 0, retentionDays).Format(time.RFC3339Nano), Valid: true}
+		}
+	}
+	if _, err := tx.ExecContext(r.Context(), "UPDATE runs SET status=?,write_suspended=?,retention_days=?,closed_at=?,retention_target_at=? WHERE id=?", status, suspended, retentionDays, closedAt, retentionTarget, r.PathValue("id")); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.audit(r, adminFromContext(r).Username, "run.status", "run:"+r.PathValue("id"), "success")
 	return respond(w, map[string]bool{"ok": true})
 }
 
@@ -374,5 +481,6 @@ func (s *Server) key(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	s.audit(r, adminFromContext(r).Username, "export.owner_key", "run:"+a.ID, "success")
 	return respond(w, map[string]any{"run_id": a.ID, "version_id": a.VersionID, "hash": snapshot.PublicationHash, "content_hash": snapshot.Hash, "policy": snapshot.Policy, "arms": a.Arms, "tasks": a.Tasks, "bundle": snapshot.Bundle})
 }

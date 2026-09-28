@@ -61,10 +61,18 @@ type Summary struct {
 }
 
 type health struct {
-	Enrolled    int     `json:"enrolled"`
-	Completed   int     `json:"completed"`
-	Incomplete  int     `json:"incomplete"`
-	LastEventAt *string `json:"last_event_at"`
+	Enrolled         int     `json:"enrolled"`
+	Completed        int     `json:"completed"`
+	Incomplete       int     `json:"incomplete"`
+	LastEventAt      *string `json:"last_event_at"`
+	EnrollmentCap    int     `json:"enrollment_cap"`
+	EventBytes       int64   `json:"event_bytes"`
+	DataBytes        int64   `json:"data_bytes"`
+	EventByteLimit   int64   `json:"event_byte_limit"`
+	DatabaseBytes    int64   `json:"database_bytes"`
+	ActiveRequests   int64   `json:"active_requests"`
+	RetentionTarget  *string `json:"retention_target_at,omitempty"`
+	RetentionOverdue bool    `json:"retention_overdue"`
 }
 
 type reportSession struct {
@@ -144,9 +152,12 @@ func metricsForAttempt(ctx context.Context, q querier, a reportAttempt, snapshot
 	return m, elapsed, err
 }
 
-func reportRows(ctx context.Context, q querier, a *run) ([]AssignedRow, health, error) {
+func (s *Server) reportRows(ctx context.Context, q querier, a *run) ([]AssignedRow, health, error) {
 	sessions := []reportSession{}
-	h := health{}
+	h := health{EnrollmentCap: a.EnrollmentCap, EventBytes: a.EventBytes, DataBytes: a.DataBytes, EventByteLimit: maxRunEventData, DatabaseBytes: s.databaseBytes(), ActiveRequests: s.active.Load(), RetentionTarget: a.RetentionTarget}
+	if a.RetentionTarget != nil && a.Status == "closed" && *a.RetentionTarget <= now() {
+		h.RetentionOverdue = true
+	}
 	rows, err := q.QueryContext(ctx, "SELECT id,variant_id,tasks_json,nodes_json,experience,docs_familiarity,completed_at IS NOT NULL FROM sessions WHERE run_id=? ORDER BY created_at,id", a.ID)
 	if err != nil {
 		return nil, h, err
@@ -314,7 +325,7 @@ func (s *Server) results(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	rows, health, err := reportRows(r.Context(), tx, a)
+	rows, health, err := s.reportRows(r.Context(), tx, a)
 	if err != nil {
 		return err
 	}
@@ -353,7 +364,7 @@ func (s *Server) export(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	rows, _, err := reportRows(r.Context(), tx, a)
+	rows, _, err := s.reportRows(r.Context(), tx, a)
 	if err != nil {
 		return err
 	}
@@ -366,6 +377,7 @@ func (s *Server) export(w http.ResponseWriter, r *http.Request) error {
 	}
 	w.Header().Set("Content-Disposition", `attachment; filename="assigned-tasks.`+format+`"`)
 	if format == "json" {
+		s.audit(r, adminFromContext(r).Username, "export.blinded", "run:"+a.ID, "success")
 		return respond(w, map[string]any{"run_id": a.ID, "version_id": a.VersionID, "version_hash": snapshot.PublicationHash, "mode": a.Mode, "policy": snapshot.Policy, "rows": rows})
 	}
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
@@ -389,7 +401,11 @@ func (s *Server) export(w http.ResponseWriter, r *http.Request) error {
 		}
 	}
 	c.Flush()
-	return c.Error()
+	if err := c.Error(); err != nil {
+		return err
+	}
+	s.audit(r, adminFromContext(r).Username, "export.blinded", "run:"+a.ID, "success")
+	return nil
 }
 
 type ownerAttempt struct {
@@ -518,5 +534,6 @@ func (s *Server) eventExport(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	w.Header().Set("Content-Disposition", `attachment; filename="owner-events.json"`)
+	s.audit(r, adminFromContext(r).Username, "export.events", "run:"+a.ID, "success")
 	return respond(w, map[string]any{"run_id": a.ID, "policy": snapshot.Policy, "sessions": sessions, "attempts": attempts, "events": events})
 }

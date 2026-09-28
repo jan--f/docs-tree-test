@@ -11,6 +11,7 @@ let modeFilter = 'real';
 let selectedRun = '';
 let result = null;
 let editor = null;
+let invitation = null;
 let operation = false;
 let loadGeneration = 0;
 let previewTimer;
@@ -56,11 +57,12 @@ function renderIdentity() {
   const target = document.getElementById('identity');
   target.replaceChildren();
   if (!auth?.authenticated) return;
-  target.append(el('span', {class: 'help', style: 'margin:0'}, auth.username), el('span', {class: 'badge'}, owner() ? 'Owner' : 'Analyst'), button('Sign out', () => perform(async () => {
+  target.append(el('span', {class: 'help identity-name'}, auth.username), el('span', {class: 'badge'}, owner() ? 'Owner' : 'Analyst'), button('Sign out', () => perform(async () => {
     if (!await mayLeaveEditor()) return;
     await mutate('/admin/api/logout', 'POST');
     auth = null;
     editor = null;
+    invitation = null;
     runs = []; drafts = []; versions = []; result = null;
     renderLogin();
   }), 'quiet small'));
@@ -79,7 +81,7 @@ function renderLogin() {
       try {
         auth = await api('/admin/api/login', {method: 'POST', body: {username: username.value, password: password.value}});
         password.value = '';
-        if (!owner()) editor = null;
+        if (!owner()) { editor = null; invitation = null; }
         await refreshData();
         view = owner() ? 'runs' : 'results';
         renderWorkspace();
@@ -128,7 +130,7 @@ function modeField(onchange) {
   }));
 }
 
-function runBadges(run) { return [el('span', {class: `badge ${run.mode}`}, run.mode === 'pilot' ? 'Pilot' : 'Real study'), el('span', {class: `badge ${run.status}`}, run.status)]; }
+function runBadges(run) { return [el('span', {class: `badge ${run.mode}`}, run.mode === 'pilot' ? 'Pilot' : 'Real study'), el('span', {class: `badge ${run.status}`}, run.status), run.purge_pending && el('span', {class: 'badge'}, 'Purge cleanup pending')]; }
 
 function renderRuns(content) {
   content.replaceChildren(el('div', {class: 'section-heading'}, el('div', {}, el('p', {class: 'eyebrow'}, 'Operations'), el('h1', {}, 'Runs & activity'), el('p', {class: 'muted'}, 'Monitor participation and enrollment. Review outcomes in Blinded results.')), button('Refresh', () => perform(async () => { await refreshData(); result = null; renderWorkspace(); }))),
@@ -139,9 +141,10 @@ function renderRuns(content) {
   for (const run of visible) {
     const actions = [button('View activity', () => { selectedRun = run.id; loadActivity(); })];
     if (owner()) {
-      for (const status of ['open', 'paused', 'closed']) if (status !== run.status) actions.push(button(status === 'open' ? 'Open enrollment' : status === 'paused' ? 'Pause' : 'Close', () => changeRunStatus(run, status), status === 'closed' ? 'danger small' : 'secondary small'));
+      for (const status of ['open', 'paused', 'closed', 'suspended']) if (status !== run.status && (!run.purge_pending || status === 'closed' || status === 'suspended')) actions.push(button(status === 'open' ? 'Open enrollment' : status === 'paused' ? 'Pause' : status === 'closed' ? 'Close' : 'Suspend writes', () => changeRunStatus(run, status), status === 'closed' || status === 'suspended' ? 'danger small' : 'secondary small'));
+      if (run.recruitment === 'invitation') actions.push(button('Create invitation', () => createInvitation(run), 'secondary small'));
     }
-    content.append(el('article', {class: 'list-card'}, el('div', {}, el('h2', {class: 'word-break'}, run.slug), el('div', {class: 'status-strip'}, runBadges(run)), el('p', {style: 'margin-top:.5rem'}, `Created ${formatDate(run.created_at)}`), owner() && el('a', {href: `/s/${encodeURIComponent(run.slug)}`, class: 'subtle-link', target: '_blank', rel: 'noopener'}, 'Open participant link ↗')), el('div', {class: 'actions'}, actions)));
+    content.append(el('article', {class: 'list-card'}, el('div', {}, el('h2', {class: 'word-break'}, run.slug), el('div', {class: 'status-strip'}, runBadges(run)), el('p', {class: 'created-at'}, `Created ${formatDate(run.created_at)} · ${run.recruitment === 'invitation' ? 'Invitation-only' : 'Public link'} · cap ${run.enrollment_cap}`), run.retention_target_at && el('p', {class: run.status === 'closed' && new Date(run.retention_target_at) <= new Date() ? 'retention-overdue' : ''}, `Retention target: ${formatDate(run.retention_target_at)}`), run.purged_at && el('p', {}, `Participant data purged ${formatDate(run.purged_at)}`), owner() && el('a', {href: `/s/${encodeURIComponent(run.slug)}`, class: 'subtle-link', target: '_blank', rel: 'noopener'}, 'Open participant link ↗'), invitation?.runID === run.id && el('div', {class: 'invite-link'}, el('strong', {}, 'Single-use invitation (copy now):'), el('code', {}, invitation.url), el('p', {class: 'help'}, `Expires ${formatDate(invitation.expiresAt)}`), button('Copy invitation', () => copyInvitation(invitation.url), 'secondary small'))), el('div', {class: 'actions'}, actions)));
   }
   content.append(el('section', {id: 'activity-detail', 'aria-live': 'polite'}));
   if (selectedRun && visible.some(run => run.id === selectedRun)) loadActivity();
@@ -149,14 +152,28 @@ function renderRuns(content) {
 }
 
 async function changeRunStatus(run, status) {
-  const descriptions = {open: 'New participants will be able to join this run.', paused: 'New enrollment will pause. Participants who have already joined can continue.', closed: 'New enrollment will close. Participants who have already joined can still finish.'};
-  if (!await confirmDialog({title: `${status === 'open' ? 'Open' : status === 'paused' ? 'Pause' : 'Close'} ${run.slug}?`, message: descriptions[status], confirm: status === 'open' ? 'Open enrollment' : status === 'paused' ? 'Pause enrollment' : 'Close enrollment', danger: status === 'closed'})) return;
+  const descriptions = {open: 'New participants will be able to join this run.', paused: 'New enrollment will pause. Participants who have already joined can continue.', closed: 'New enrollment will close. Participants who have already joined can still finish.', suspended: 'All participant writes, including progress saves and completions, will be rejected until you choose another state.'};
+  if (!await confirmDialog({title: `${status === 'open' ? 'Open' : status === 'paused' ? 'Pause' : status === 'closed' ? 'Close' : 'Suspend'} ${run.slug}?`, message: descriptions[status], confirm: status === 'open' ? 'Open enrollment' : status === 'paused' ? 'Pause enrollment' : status === 'closed' ? 'Close enrollment' : 'Suspend writes', danger: status === 'closed' || status === 'suspended'})) return;
   perform(async () => {
     await mutate(runPath(run.id), 'PATCH', {status});
     await refreshData();
     renderWorkspace();
     announce(`Run ${run.slug} is now ${status}.`);
   });
+}
+
+async function createInvitation(run) {
+  perform(async () => {
+    const value = await mutate(`${runPath(run.id)}/invitations`, 'POST', {expires_in_hours: 168});
+    invitation = {runID: run.id, url: value.invite_url, expiresAt: value.expires_at};
+    renderWorkspace();
+    notice('A single-use invitation was created. Copy it before creating another invitation.', 'success');
+  });
+}
+
+async function copyInvitation(value) {
+  try { await navigator.clipboard.writeText(value); announce('Invitation copied.'); }
+  catch { notice('Copy the invitation link shown above.'); }
 }
 
 async function loadActivity() {
@@ -174,8 +191,8 @@ async function loadActivity() {
 }
 
 function healthCards(health = {}) {
-  const entries = [['Enrolled', health.enrolled ?? 0], ['Completed sessions', health.completed ?? 0], ['Incomplete sessions', health.incomplete ?? 0], ['Last recorded event', formatDate(health.last_event_at)]];
-  return el('dl', {class: 'metric-grid'}, entries.map(([title, value], index) => el('div', {class: 'metric'}, el('dt', {}, title), el('dd', {class: index === 3 ? 'timestamp' : ''}, value))));
+  const entries = [['Enrolled', health.enrolled ?? 0], ['Enrollment cap', health.enrollment_cap ?? 0], ['Completed sessions', health.completed ?? 0], ['Incomplete sessions', health.incomplete ?? 0], ['Run storage', `${Math.ceil((health.data_bytes || 0) / 1024)} KiB / ${Math.ceil((health.event_byte_limit || 0) / 1024 / 1024)} MiB`], ['Database footprint', `${Math.ceil((health.database_bytes || 0) / 1024)} KiB`], ['Active requests', health.active_requests ?? 0], ['Last recorded event', formatDate(health.last_event_at)]];
+  return el('dl', {class: 'metric-grid'}, entries.map(([title, value], index) => el('div', {class: 'metric'}, el('dt', {}, title), el('dd', {class: index === 7 ? 'timestamp' : ''}, value))));
 }
 
 function createRunForm(versionID) {
@@ -183,10 +200,13 @@ function createRunForm(versionID) {
   const versionInput = select('run-version', versions.map(version => [version.id, `${version.title} · ${version.hash.slice(0, 10)}`]), versionID || versions[0].id);
   const slugInput = el('input', {id: 'run-slug', name: 'slug', required: true, pattern: '[a-z][a-z0-9-]{0,95}', maxlength: 96, placeholder: 'docs-navigation-pilot', autocomplete: 'off'});
   const modeInput = select('run-mode', [['pilot', 'Pilot · try the complete workflow'], ['real', 'Real · collect study responses']], 'pilot');
+  const recruitmentInput = select('run-recruitment', [['public', 'Public link · capped enrollment'], ['invitation', 'Invitations · single-use links']], 'public');
+  const enrollmentInput = el('input', {id: 'run-enrollment-cap', name: 'enrollment_cap', type: 'number', min: 1, max: 10000, value: 200, required: true});
+  const retentionInput = el('input', {id: 'run-retention-days', name: 'retention_days', type: 'number', min: 1, max: 3650, value: 90, required: true});
   return el('form', {class: 'card', onsubmit: event => {
     event.preventDefault();
     perform(async () => {
-      const run = await mutate('/admin/api/runs', 'POST', {version_id: versionInput.value, slug: slugInput.value, mode: modeInput.value});
+      const run = await mutate('/admin/api/runs', 'POST', {version_id: versionInput.value, slug: slugInput.value, mode: modeInput.value, recruitment: recruitmentInput.value, enrollment_cap: Number(enrollmentInput.value), retention_days: Number(retentionInput.value)});
       await refreshData();
       modeFilter = run.mode;
       selectedRun = run.id;
@@ -194,7 +214,7 @@ function createRunForm(versionID) {
       renderWorkspace();
       notice(`Created ${run.mode === 'pilot' ? 'pilot' : 'real-study'} run “${run.slug}”. Enrollment is paused; open it when you’re ready to share the link.`, 'success');
     });
-  }}, el('h2', {}, 'Create a run'), el('p', {class: 'help'}, 'Each run uses an immutable published version. New runs begin paused.'), field('Published version', versionInput), el('div', {class: 'field-grid'}, field('Public link name', slugInput, 'Lowercase letters, numbers and hyphens. This becomes /s/your-link-name.'), field('Purpose', modeInput)), el('button', {type: 'submit'}, 'Create paused run'));
+  }}, el('h2', {}, 'Create a run'), el('p', {class: 'help'}, 'Each run uses an immutable published version. New runs begin paused.'), field('Published version', versionInput), el('div', {class: 'field-grid'}, field('Public link name', slugInput, 'Lowercase letters, numbers and hyphens. This becomes /s/your-link-name.'), field('Purpose', modeInput), field('Recruitment', recruitmentInput), field('Enrollment cap', enrollmentInput, 'Hard maximum for all participants, including invitations.'), field('Retention target (days)', retentionInput, 'Manual purge is due this many days after closure. Data is never deleted automatically.')), el('button', {type: 'submit'}, 'Create paused run'));
 }
 
 function renderDrafts(content) {

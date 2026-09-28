@@ -2,6 +2,7 @@
 package server
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
@@ -14,17 +15,26 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"net/netip"
 	"net/url"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
 type Server struct {
-	db     *sql.DB
-	assets fs.FS
-	origin string
-	secure bool
-	mux    *http.ServeMux
+	db             *sql.DB
+	assets         fs.FS
+	origin         string
+	secure         bool
+	mux            *http.ServeMux
+	identityKey    []byte
+	limits         *rateLimiter
+	loginLimits    *loginLimiter
+	trustedProxies []netip.Prefix
+	dbPath         string
+	active         atomic.Int64
 }
 
 type apiError struct {
@@ -39,9 +49,16 @@ type handler func(http.ResponseWriter, *http.Request) error
 
 func (s *Server) route(pattern string, h handler) {
 	s.mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+		id := randomID()
+		w.Header().Set("X-Request-ID", id)
+		r = r.WithContext(context.WithValue(r.Context(), requestIDKey{}, id))
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			if !s.sameOrigin(r) {
 				writeError(w, problem(http.StatusForbidden, "same-origin request required"))
+				return
+			}
+			if err := s.limitPublicSource(w, r); err != nil {
+				writeError(w, err)
 				return
 			}
 		}
@@ -74,10 +91,14 @@ func rawResponse(w http.ResponseWriter, data []byte) error {
 }
 
 func decode(w http.ResponseWriter, r *http.Request, value any) error {
+	return decodeLimit(w, r, value, 8<<20)
+}
+
+func decodeLimit(w http.ResponseWriter, r *http.Request, value any, maxBytes int64) error {
 	if media := strings.Split(r.Header.Get("Content-Type"), ";")[0]; media != "application/json" {
 		return problem(http.StatusUnsupportedMediaType, "Content-Type must be application/json")
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 8<<20)
+	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
 	d := json.NewDecoder(r.Body)
 	d.DisallowUnknownFields()
 	if err := d.Decode(value); err != nil {
@@ -130,9 +151,11 @@ func (s *Server) sameOrigin(r *http.Request) bool {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.active.Add(1)
+	defer s.active.Add(-1)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Referrer-Policy", "same-origin")
-	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 	w.Header().Set("Cache-Control", "no-store")
 	if s.secure {
 		w.Header().Set("Strict-Transport-Security", "max-age=31536000")
@@ -161,6 +184,7 @@ func (s *Server) routes() {
 	s.route("GET /admin/api/runs", s.authorize(false, s.listRuns))
 	s.route("POST /admin/api/runs", s.authorize(true, s.createRun))
 	s.route("PATCH /admin/api/runs/{id}", s.authorize(true, s.updateRun))
+	s.route("POST /admin/api/runs/{id}/invitations", s.authorize(true, s.createInvitation))
 	s.route("GET /admin/api/runs/{id}/results", s.authorize(false, s.results))
 	s.route("GET /admin/api/runs/{id}/export", s.authorize(false, s.export))
 	s.route("GET /admin/api/runs/{id}/key", s.authorize(true, s.key))
@@ -177,12 +201,31 @@ func (s *Server) routes() {
 			writeError(w, problem(404, "asset not found"))
 			return
 		}
+		if r.URL.Path == "/assets/" || strings.HasSuffix(r.URL.Path, "/") {
+			writeError(w, problem(404, "asset not found"))
+			return
+		}
 		// Asset filenames are stable across releases; revalidate on reload so a
 		// new protocol is never paired with a five-minute-old browser controller.
 		w.Header().Set("Cache-Control", "no-cache")
 		http.FileServer(http.FS(s.assets)).ServeHTTP(w, r)
 	})
 	s.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { writeError(w, problem(404, "not found")) })
+}
+
+func (s *Server) databaseBytes() int64 {
+	if s.dbPath == "" || s.dbPath == ":memory:" {
+		return 0
+	}
+	var size int64
+	for _, path := range []string{s.dbPath, s.dbPath + "-wal", s.dbPath + "-shm"} {
+		if info, err := filepath.Abs(path); err == nil {
+			if stat, err := fsStat(info); err == nil {
+				size += stat
+			}
+		}
+	}
+	return size
 }
 
 func (s *Server) html(name string) handler {

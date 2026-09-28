@@ -108,8 +108,8 @@ func validEpoch(raw json.RawMessage) bool {
 type finishSelection struct{ Outcome, NodeID string }
 
 func appendEvents(ctx context.Context, q querier, session *storedSession, snapshot *frozenSnapshot, a *attempt, incoming []Event, terminal *finishSelection) ([]Event, error) {
-	if len(incoming) > 1000 {
-		return nil, problem(422, "send at most 1000 events per request")
+	if len(incoming) > maxEventsPerRequest {
+		return nil, problem(422, "send at most 200 events per request")
 	}
 	if terminal != nil {
 		if len(incoming) == 0 || incoming[len(incoming)-1].Type != "submit" {
@@ -130,6 +130,7 @@ func appendEvents(ctx context.Context, q querier, session *storedSession, snapsh
 	}
 	index := indexNodes(snapshot.Trees[session.Variant], session.Nodes)
 	originalCount := len(saved)
+	var addedBytes int64
 	for i, e := range incoming {
 		if e.Type == "submit" && (terminal == nil || i != len(incoming)-1) {
 			return nil, problem(422, "submit is only accepted as the final event of finish")
@@ -195,11 +196,25 @@ func appendEvents(ctx context.Context, q querier, session *storedSession, snapsh
 		if e.Type == "select" && index[e.NodeID].ContentID == "" {
 			return nil, problem(422, "node is not selectable")
 		}
-		if len(saved) >= 100000 {
+		if len(saved) >= maxEventsPerAttempt {
 			return nil, problem(422, "attempt event limit exceeded")
 		}
+		addedBytes += int64(len(canonicalEvent(e)))
 		ids[e.ID] = e.Seq
 		saved = append(saved, e)
+	}
+	if a.EventBytes+addedBytes > maxAttemptEventData {
+		return nil, problem(422, "attempt event data limit exceeded")
+	}
+	if session.StorageBytes+session.EventBytes+addedBytes > maxSessionEventData {
+		return nil, problem(422, "session event data limit exceeded")
+	}
+	var runBytes int64
+	if err := q.QueryRowContext(ctx, "SELECT data_bytes FROM runs WHERE id=?", session.RunID).Scan(&runBytes); err != nil {
+		return nil, err
+	}
+	if runBytes+addedBytes > maxRunEventData {
+		return nil, problem(429, "study event storage limit reached")
 	}
 	// A page epoch is contiguous. Returning to an older page's stream indicates
 	// another tab is writing and must reload instead of merging its navigation.
@@ -274,7 +289,15 @@ func appendEvents(ctx context.Context, q querier, session *storedSession, snapsh
 		}
 	}
 	a.NextSeq = len(saved) + 1
-	if _, err := q.ExecContext(ctx, "UPDATE attempts SET next_seq=? WHERE id=?", a.NextSeq, a.ID); err != nil {
+	a.EventBytes += addedBytes
+	session.EventBytes += addedBytes
+	if _, err := q.ExecContext(ctx, "UPDATE attempts SET next_seq=?,event_bytes=event_bytes+? WHERE id=?", a.NextSeq, addedBytes, a.ID); err != nil {
+		return nil, err
+	}
+	if _, err := q.ExecContext(ctx, "UPDATE sessions SET event_bytes=event_bytes+? WHERE id=?", addedBytes, session.ID); err != nil {
+		return nil, err
+	}
+	if _, err := q.ExecContext(ctx, "UPDATE runs SET event_bytes=event_bytes+?,data_bytes=data_bytes+? WHERE id=?", addedBytes, addedBytes, session.RunID); err != nil {
 		return nil, err
 	}
 	return saved, nil
