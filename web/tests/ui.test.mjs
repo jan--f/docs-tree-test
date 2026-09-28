@@ -442,3 +442,139 @@ test('whole-study file import requires complete files and confirmation, then rep
   assert.equal(validated.trees['candidate.md'], markdown);
   assert.equal(validated.config.title, 'Imported study');
 });
+
+function offlineEvents(count) {
+  const events = [firstEvent, {id: 'enter', seq: 2, type: 'enter', node_id: 'g', elapsed_ms: 300, epoch: 'old-page', visible: true}];
+  for (let seq = 3; seq <= count; seq++) events.push({id: `select-${seq}`, seq, type: 'select', node_id: 'p', elapsed_ms: 300 + seq, epoch: 'old-page', visible: true});
+  return events;
+}
+
+function appendBatch(ledger, events, terminal = false) {
+  assert.ok(events.length > 0 && events.length <= 200, 'every new request respects the backend event limit');
+  for (const event of events) {
+    if (!terminal) assert.notEqual(event.type, 'submit', 'checkpoints must never send terminal events');
+    if (event.seq <= ledger.length) assert.deepEqual(event, ledger[event.seq - 1]);
+    else { assert.equal(event.seq, ledger.length + 1, 'event sequence must stay contiguous'); ledger.push(event); }
+  }
+  return ledger.length + 1;
+}
+
+test('large offline checkpoints drain bounded batches and preserve concurrent navigation', async () => {
+  const pending = offlineEvents(450);
+  const storage = new Map([['tree-study:v1:batch', JSON.stringify({sessionId: 'session', attemptId: 'attempt', nextSeq: 451, events: pending})]]);
+  environment('/s/batch', storage);
+  const ledger = [];
+  const batches = [];
+  let acknowledge;
+  globalThis.fetch = async (path, options = {}) => {
+    if (path === '/api/public/batch') return json({title: 'Study', status: 'open', mode: 'real'});
+    if (path.endsWith('/session')) return json(session(0, {id: 'attempt', events: ledger, next_seq: ledger.length + 1}));
+    const body = JSON.parse(options.body);
+    if (path.endsWith('/events')) {
+      batches.push(body.events.length);
+      const next = appendBatch(ledger, body.events);
+      if (batches.length === 1) return new Promise(resolve => { acknowledge = () => resolve(json({next_seq: next})); });
+      return json({next_seq: next});
+    }
+    if (path.endsWith('/finish')) { appendBatch(ledger, body.events, true); return json(session(1)); }
+    throw new Error(`Unexpected endpoint ${path}`);
+  };
+  await loadParticipant();
+  await waitFor(() => document.body.textContent.includes('Confirm this page'));
+  await window.dispatch('online');
+  await waitFor(() => acknowledge);
+  await byLabel('Select Access').click();
+  acknowledge();
+  await waitFor(() => JSON.parse(storage.get('tree-study:v1:batch')).events.length === 0);
+  assert.deepEqual(batches, [200, 200, 52]);
+  assert.equal(ledger.length, 452);
+  assert.equal(ledger.at(-1).type, 'select');
+  await byText('Confirm this page').click();
+  assert.equal(ledger.at(-1).type, 'submit');
+});
+
+test('large finishes survive lost prefix and finish acknowledgments without changing confirmation', async () => {
+  const pending = offlineEvents(450);
+  const storage = new Map([['tree-study:v1:batch-finish', JSON.stringify({sessionId: 'session', attemptId: 'attempt', nextSeq: 451, events: pending})]]);
+  let clock = 1000;
+  environment('/s/batch-finish', storage, () => clock);
+  const ledger = [];
+  const checkpoints = [];
+  const finishes = [];
+  let current;
+  globalThis.fetch = async (path, options = {}) => {
+    if (path === '/api/public/batch-finish') return json({title: 'Study', status: 'open', mode: 'real'});
+    if (path.endsWith('/session')) return json(current || session(0, {id: 'attempt', events: ledger, next_seq: ledger.length + 1}));
+    const body = JSON.parse(options.body);
+    if (path.endsWith('/events')) {
+      checkpoints.push(body.events.length);
+      const next = appendBatch(ledger, body.events);
+      if (checkpoints.length === 1) throw new TypeError('Lost prefix acknowledgment');
+      return json({next_seq: next});
+    }
+    if (path.endsWith('/finish')) {
+      finishes.push(options.body);
+      appendBatch(ledger, body.events, true);
+      current = session(1);
+      if (finishes.length === 1) throw new TypeError('Lost finish acknowledgment');
+      return json(current);
+    }
+    throw new Error(`Unexpected endpoint ${path}`);
+  };
+  await loadParticipant();
+  await waitFor(() => document.body.textContent.includes('Confirm this page'));
+  clock = 1123;
+  await byText('Confirm this page').click();
+  const frozen = JSON.parse(storage.get('tree-study:v1:batch-finish')).finishCommand;
+  assert.equal(frozen.events.length, 200);
+  assert.equal(frozen.events.at(-1).elapsed_ms, 123);
+  assert.equal(finishes.length, 0);
+  environment('/s/batch-finish', storage, () => 9000);
+  await loadParticipant();
+  await waitFor(() => document.body.textContent.includes('Retry saving response'));
+  assert.deepEqual(checkpoints, [200, 200]);
+  assert.equal(finishes[0], JSON.stringify(frozen));
+  environment('/s/batch-finish', storage, () => 15000);
+  await loadParticipant();
+  await waitFor(() => document.body.textContent.includes('Situation 2'));
+  assert.equal(finishes.length, 2);
+  assert.equal(finishes[1], finishes[0]);
+  assert.deepEqual(ledger.at(-1), frozen.events.at(-1));
+  assert.equal(ledger.length, 452);
+  assert.equal(JSON.parse(storage.get('tree-study:v1:batch-finish')).finishCommand, undefined);
+});
+
+test('finishing tolerates a lost checkpoint response across the frozen terminal batch boundary', async () => {
+  const events = offlineEvents(450);
+  const storage = new Map([['tree-study:v1:overlap', JSON.stringify({sessionId: 'session', attemptId: 'attempt', nextSeq: 451, events})]]);
+  environment('/s/overlap', storage);
+  const ledger = [];
+  let loseCheckpoint;
+  let checkpoints = 0;
+  let final;
+  globalThis.fetch = async (path, options = {}) => {
+    if (path === '/api/public/overlap') return json({title: 'Study', status: 'open', mode: 'real'});
+    if (path.endsWith('/session')) return json(session(0, {id: 'attempt', events: [], next_seq: 1}));
+    const body = JSON.parse(options.body);
+    if (path.endsWith('/events')) {
+      checkpoints++;
+      const next = appendBatch(ledger, body.events);
+      if (checkpoints === 2) return new Promise((_, reject) => { loseCheckpoint = () => reject(new TypeError('Lost overlapping checkpoint acknowledgment')); });
+      return json({next_seq: next});
+    }
+    if (path.endsWith('/finish')) { final = body; appendBatch(ledger, body.events, true); return json(session(1)); }
+    throw new Error(`Unexpected endpoint ${path}`);
+  };
+  await loadParticipant();
+  await waitFor(() => document.body.textContent.includes('Confirm this page'));
+  await window.dispatch('online');
+  await waitFor(() => loseCheckpoint);
+  const confirm = byText('Confirm this page').click();
+  const frozen = JSON.parse(storage.get('tree-study:v1:overlap')).finishCommand;
+  assert.equal(frozen.events[0].seq, 253);
+  loseCheckpoint();
+  await confirm;
+  assert.deepEqual(final, frozen);
+  assert.equal(ledger.length, 452);
+  assert.ok(document.body.textContent.includes('Situation 2'));
+});
