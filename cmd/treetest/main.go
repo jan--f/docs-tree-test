@@ -59,7 +59,7 @@ func run(args []string) error {
 	case "serve":
 		listen = flags.String("listen", "127.0.0.1:8080", "HTTP listen address")
 	case "validate", "import":
-		studyDir = flags.String("study", "studies/prometheus", "Directory containing study.json and Markdown trees")
+		studyDir = flags.String("study", "studies/example", "Directory containing study.json and Markdown trees")
 	case "user":
 		username = flags.String("username", "owner", "Account name")
 		role = flags.String("role", "owner", "owner or analyst")

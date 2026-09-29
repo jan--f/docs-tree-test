@@ -17,7 +17,7 @@ jobs:
       - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
       - run: CGO_ENABLED=1 go test -race ./...
       - run: CGO_ENABLED=0 go build ./cmd/treetest
-      - run: go run ./cmd/treetest validate --study studies/prometheus
+      - run: go run ./cmd/treetest validate --study studies/example
       - uses: actions/setup-node@v4
         with:
           node-version: '22'

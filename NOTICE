@@ -14,7 +14,7 @@ The upstream Prometheus material is licensed under the Apache License 2.0.
 See LICENSES/Apache-2.0.txt for a copy of that license.
 
 Fixture extraction, menu formatting, study tasks and answer mappings are
-adaptations for this experiment. See studies/prometheus/README.md for sources.
+adaptations for this experiment. See studies/example/README.md for sources.
 
 The Prometheus branding preset includes the Prometheus logo from
 https://github.com/prometheus/docs/blob/main/public/assets/prometheus-logo.svg.

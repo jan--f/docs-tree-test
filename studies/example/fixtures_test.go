@@ -1,4 +1,4 @@
-package prometheus_test
+package example_test
 
 import (
 	"sort"

@@ -10,7 +10,7 @@ The included study compares the current Prometheus documentation menu with the
 effective navigation of `feature/proposed-docs-structure`. It covers the whole
 menu, with twelve draft tasks spanning easy, intermediate, and complex needs.
 Review the task prompts and accepted destinations, then pilot them before
-opening real enrollment. See [fixture provenance](studies/prometheus/README.md).
+opening real enrollment. See [fixture provenance](studies/example/README.md).
 
 ## Quick start
 
@@ -19,9 +19,9 @@ JavaScript build step. One process and a persistent local SQLite file are enough
 
 ```sh
 go build -trimpath -o bin/treetest ./cmd/treetest
-./bin/treetest validate --study studies/prometheus
+./bin/treetest validate --study studies/example
 ./bin/treetest user --db data/study.sqlite --username owner --role owner
-./bin/treetest import --db data/study.sqlite --study studies/prometheus
+./bin/treetest import --db data/study.sqlite --study studies/example
 ./bin/treetest serve --db data/study.sqlite --branding prometheus --public-url http://127.0.0.1:8080
 ```
 
@@ -88,13 +88,13 @@ and create runs. Draft saves use revisions to detect concurrent edits.
 
 ### Tasks and assignment
 
-The complete example is in [study.json](studies/prometheus/study.json). Its main
+The complete example is in [study.json](studies/example/study.json). Its main
 fields are:
 
 ```json
 {
   "schema_version": 1,
-  "slug": "prometheus-navigation",
+  "slug": "example",
   "title": "Finding information in Prometheus documentation",
   "instructions": "Choose where you would expect to find the information.",
   "tasks_per_session": 6,
@@ -298,7 +298,7 @@ the production database, then pass it to every command that opens that database:
 umask 077
 ./bin/treetest identity-key --out /var/lib/treetest/identity.key
 ./bin/treetest user --db /var/lib/treetest/treetest.sqlite --identity-key-file /var/lib/treetest/identity.key --username owner
-./bin/treetest import --db /var/lib/treetest/treetest.sqlite --identity-key-file /var/lib/treetest/identity.key --study studies/prometheus
+./bin/treetest import --db /var/lib/treetest/treetest.sqlite --identity-key-file /var/lib/treetest/identity.key --study studies/example
 ./bin/treetest serve --db /var/lib/treetest/treetest.sqlite \
   --identity-key-file /var/lib/treetest/identity.key \
   --branding prometheus --listen 127.0.0.1:8080 --public-url https://study.example.org
@@ -333,7 +333,7 @@ mkdir -p data
 sudo chown 65532:65532 data
 docker run --rm -v "$PWD/data:/data" docs-tree-test identity-key --out /data/identity.key
 docker run --rm -v "$PWD/data:/data" docs-tree-test user --db /data/study.sqlite --identity-key-file /data/identity.key --username owner
-docker run --rm -v "$PWD/data:/data" docs-tree-test import --db /data/study.sqlite --identity-key-file /data/identity.key --study /studies/prometheus
+docker run --rm -v "$PWD/data:/data" docs-tree-test import --db /data/study.sqlite --identity-key-file /data/identity.key --study /studies/example
 docker run -d --name treetest --restart unless-stopped \
   -p 127.0.0.1:8080:8080 -v "$PWD/data:/data" docs-tree-test \
   serve --db /data/study.sqlite --identity-key-file /data/identity.key \

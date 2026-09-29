@@ -374,8 +374,8 @@ From this project's root, with the pinned source objects and cached worktrees
 available:
 
 ```sh
-python studies/prometheus/extract.py --cross-check-cache
-go test ./studies/prometheus
+python studies/example/extract.py --cross-check-cache
+go test ./studies/example
 ```
 
 Without the optional generated collection, omit `--cross-check-cache`. Use
@@ -387,15 +387,15 @@ For a detailed audit of every node (original source, route, rank, label,
 occurrence ID, content identity, and selectability):
 
 ```sh
-python studies/prometheus/extract.py --inventory current
-python studies/prometheus/extract.py --inventory candidate
+python studies/example/extract.py --inventory current
+python studies/example/extract.py --inventory candidate
 ```
 
 To preview regenerated tree text use `--tree current` or `--tree candidate`.
 To materialize it, the exact command is:
 
 ```sh
-python studies/prometheus/extract.py --write
+python studies/example/extract.py --write
 ```
 
 That command writes only `current.md` and `candidate.md` next to the utility,

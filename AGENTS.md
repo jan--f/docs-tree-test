@@ -43,7 +43,7 @@ studies/<study-slug>/
   README.md                 # recommended: sources, rationale, and review notes
 ```
 
-`studies/prometheus/` is the complete draft example. It compares two complete
+`studies/example/` is the complete draft example. It compares two complete
 Prometheus documentation menus, has twelve tasks (four per difficulty), and
 uses six balanced six-task panels. Its README records pinned sources and why
 each accepted destination is sufficient. It is a fixture to review and adapt,

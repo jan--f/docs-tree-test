@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "slug": "prometheus-docs-example",
+  "slug": "example",
   "title": "Finding information in Prometheus documentation",
   "instructions": "For each situation, browse the documentation menu and select the page where you would expect to find enough information to help. You will see page names, not the articles themselves. You can go back and explore another section before choosing. If you understand the situation but cannot find a suitable page, choose the option to give up. If the situation is unclear to you, choose the option to skip it. Work as you normally would; this is a study of the documentation, not a test of your knowledge.",
   "tasks_per_session": 6,

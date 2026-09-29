@@ -18,10 +18,10 @@ import (
 	"github.com/jan--f/docs-tree-test/web"
 )
 
-// Exercise the actual Prometheus bundle, embedded frontend, enrollment protocol,
+// Exercise the shipped example bundle, embedded frontend, enrollment protocol,
 // all six responses, admin reporting, and a restored database as one workflow.
-func TestPrometheusStudyEndToEnd(t *testing.T) {
-	bundle, err := study.LoadDir("../studies/prometheus")
+func TestExampleStudyEndToEnd(t *testing.T) {
+	bundle, err := study.LoadDir("../studies/example")
 	if err != nil {
 		t.Fatal(err)
 	}
