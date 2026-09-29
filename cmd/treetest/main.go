@@ -50,6 +50,7 @@ func run(args []string) error {
 	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	db := flags.String("db", "treetest.sqlite", "SQLite database path (persistent local disk)")
 	publicURL := flags.String("public-url", "http://127.0.0.1:8080", "External origin, including http:// or https://")
+	branding := flags.String("branding", server.BrandingPrometheus, "Visual branding preset: prometheus or neutral")
 	trustedProxies := flags.String("trusted-proxies", "127.0.0.1/32,::1/128", "Comma-separated immediate proxy IPs/CIDRs allowed to set X-Forwarded-For; empty trusts none")
 	var listen, studyDir, username, role, passwordFile, out, identityKeyFile, purgeRun *string
 	var purgeOverdue, purgeConfirm *bool
@@ -102,7 +103,7 @@ func run(args []string) error {
 	if strings.TrimSpace(*trustedProxies) != "" {
 		proxies = strings.Split(*trustedProxies, ",")
 	}
-	s, err := server.OpenWithOptions(*db, web.Assets, strings.TrimRight(*publicURL, "/"), server.Options{IdentityKey: identityKey, TrustedProxies: proxies})
+	s, err := server.OpenWithOptions(*db, web.Assets, strings.TrimRight(*publicURL, "/"), server.Options{IdentityKey: identityKey, Branding: *branding, TrustedProxies: proxies})
 	if err != nil {
 		return err
 	}

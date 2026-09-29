@@ -34,6 +34,7 @@ type Server struct {
 	loginLimits    *loginLimiter
 	trustedProxies []netip.Prefix
 	dbPath         string
+	branding       Branding
 	active         atomic.Int64
 }
 
@@ -237,6 +238,11 @@ func (s *Server) html(name string) handler {
 		if err != nil {
 			return fmt.Errorf("read frontend %s: %w", name, err)
 		}
+		data = []byte(strings.NewReplacer(
+			"{{branding-class}}", s.branding.Class,
+			"{{branding-name}}", s.branding.Name,
+			"{{branding-home-label}}", s.branding.HomeLabel,
+		).Replace(string(data)))
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		if r.Method == http.MethodHead {
 			return nil

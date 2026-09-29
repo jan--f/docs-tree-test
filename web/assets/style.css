@@ -11,6 +11,8 @@
   --red-bg: #fff1f0;
   --amber: #7b5215;
   --amber-bg: #fff6df;
+  --badge-bg: #eaf0eb;
+  --badge-ink: #48604f;
   --radius: 14px;
   --shadow: 0 4px 20px #223b2c06;
   font-family: Arial, Helvetica, sans-serif;
@@ -18,6 +20,17 @@
   background: var(--paper);
   font-synthesis: none;
   line-height: 1.55;
+}
+
+.brand-prometheus {
+  --green: #c74625;
+  --green-dark: #a9351c;
+  --mint: #fff0eb;
+  --paper: #fffaf8;
+  --line: #ead6ce;
+  --shadow: 0 4px 20px #4b1b100a;
+  --badge-bg: #fff0eb;
+  --badge-ink: #c74625;
 }
 
 * {
@@ -176,6 +189,14 @@ li + li {
   border-radius: 9px;
   font-size: 1.5rem;
   line-height: 1;
+}
+
+.brand-prometheus .brand-mark {
+  width: 38px;
+  height: 38px;
+  border-radius: 0;
+  background: url("/assets/prometheus-logo.svg") center / contain no-repeat;
+  color: transparent;
 }
 
 .brand-suffix {
@@ -521,8 +542,8 @@ details > p {
   padding: .2rem .55rem;
   font-size: .74rem;
   font-weight: 650;
-  background: #eaf0eb;
-  color: #48604f;
+  background: var(--badge-bg);
+  color: var(--badge-ink);
   white-space: nowrap;
 }
 

@@ -50,13 +50,20 @@ func Open(dbPath string, assets fs.FS, publicURL string) (*Server, error) {
 // when the database is created; changing either requires a new database.
 type Options struct {
 	IdentityKey []byte
+	// Branding selects a built-in project-wide visual identity. An empty value
+	// selects Prometheus branding, which is applied to every served page.
+	Branding string
 	// TrustedProxies accepts immediate proxy IPs or CIDRs. Nil trusts loopback;
 	// an explicitly empty slice disables forwarded-header trust.
 	TrustedProxies []string
 }
 
 func OpenWithOptions(dbPath string, assets fs.FS, publicURL string, options Options) (*Server, error) {
-	s := &Server{assets: assets, limits: newRateLimiter(), loginLimits: newLoginLimiter(), dbPath: dbPath}
+	branding, err := brandingPreset(options.Branding)
+	if err != nil {
+		return nil, err
+	}
+	s := &Server{assets: assets, limits: newRateLimiter(), loginLimits: newLoginLimiter(), dbPath: dbPath, branding: branding}
 	proxies, err := parseTrustedProxies(options.TrustedProxies)
 	if err != nil {
 		return nil, err
