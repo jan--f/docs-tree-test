@@ -22,7 +22,7 @@ go build -trimpath -o bin/treetest ./cmd/treetest
 ./bin/treetest validate --study studies/prometheus
 ./bin/treetest user --db data/study.sqlite --username owner --role owner
 ./bin/treetest import --db data/study.sqlite --study studies/prometheus
-./bin/treetest serve --db data/study.sqlite --public-url http://127.0.0.1:8080
+./bin/treetest serve --db data/study.sqlite --branding prometheus --public-url http://127.0.0.1:8080
 ```
 
 The application initializes the current schema directly. There are no database
@@ -40,6 +40,13 @@ password-manager passphrase.
 Open **http://127.0.0.1:8080/admin**, log in, create a **pilot** run from the
 imported version, then open enrollment. Share its `/s/{run-slug}` link. Create a
 separate **real** run once the content and protocol are ready.
+
+### Branding
+
+Prometheus branding is the default and applies the Prometheus logo and an
+accessible orange palette to every landing, participant, and admin page. It is
+global to the running project, never selected per documentation tree. Use
+`serve --branding neutral` only to opt into the neutral Tree study identity.
 
 An optional independent analyst can have a separate account:
 
@@ -294,7 +301,7 @@ umask 077
 ./bin/treetest import --db /var/lib/treetest/treetest.sqlite --identity-key-file /var/lib/treetest/identity.key --study studies/prometheus
 ./bin/treetest serve --db /var/lib/treetest/treetest.sqlite \
   --identity-key-file /var/lib/treetest/identity.key \
-  --listen 127.0.0.1:8080 --public-url https://study.example.org
+  --branding prometheus --listen 127.0.0.1:8080 --public-url https://study.example.org
 ```
 
 The `identity-key` command creates a new random key in a `0600` file, never
@@ -330,7 +337,7 @@ docker run --rm -v "$PWD/data:/data" docs-tree-test import --db /data/study.sqli
 docker run -d --name treetest --restart unless-stopped \
   -p 127.0.0.1:8080:8080 -v "$PWD/data:/data" docs-tree-test \
   serve --db /data/study.sqlite --identity-key-file /data/identity.key \
-  --trusted-proxies "$proxy_ip" --listen 0.0.0.0:8080 --public-url https://study.example.org
+  --branding prometheus --trusted-proxies "$proxy_ip" --listen 0.0.0.0:8080 --public-url https://study.example.org
 ```
 
 ### Backups and restore
