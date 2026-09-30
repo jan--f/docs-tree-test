@@ -59,10 +59,22 @@ Summary fields: `code`, optional `task_id`, `participants`, `completed`, `assign
 
 Assigned-task exports include server elapsed time, observed foreground duration, clock-epoch counts and explicit timing quality. `navigation_ms` is nullable when an attempt is interrupted, unfinished, skipped or not started; `observed_navigation_ms` preserves partial observations. Owner-only events also include all attempt lifecycle records, including attempts with no events. Publication pins machine-readable scoring/allocation policy identifiers; policy is included in version identity and is checked when executing an existing run. Unsupported policies must not silently use newer behavior. Summary values must be derived consistently from assigned task rows. Uncertainty analysis uses participants, not individual attempts, as independent units.
 
+### Operational endpoint
+
+`serve --metrics-listen 127.0.0.1:9091` enables `GET /metrics` on a separate,
+unauthenticated monitoring listener; an empty address disables it (the default).
+It supports Prometheus text and OpenMetrics negotiation. Application routes are
+served only on `--listen`. See [README.md](README.md#prometheus-metrics) for metric
+names, labels, and counter semantics.
+
 ## Backend embedding interface
 
 `internal/server.Open(dbPath string, assets fs.FS, publicURL string) (*Server,error)` initializes an empty database or opens the current schema. Incompatible schemas are rejected and must be recreated; no migrations are provided. `OpenWithOptions(..., Options{IdentityKey: key, TrustedProxies: []string{"172.17.0.1"}})` accepts a production run-scoped-identity key and immediate proxy IPs/CIDRs allowed to supply `X-Forwarded-For` (nil trusts loopback, an empty slice trusts none); `Server` implements `http.Handler`; `Close() error`; `SetUser(username,password,role string) error`; `Import(study.Bundle) (versionID string,error)`; `Backup(path string) error`; `PurgeCandidates`/`PurgeRun` implement the confirmation-protected CLI retention workflow, including retryable SQLite compaction and WAL cleanup. `web.Assets` is an embed.FS containing index.html, participant.html, admin.html, assets/*. Server serves fixed HTML files, with JS reading path slugs; do not require template data. Bootstrap and import are CLI-only helper methods; web admin handles ordinary management.
 
 `treetest identity-key --out ...` generates a new random 32-byte key in a `0600` base64url file without opening a database. Supply it with `--identity-key-file` when first creating the database and on every subsequent open. External keys are never stored in SQLite; only their fingerprints are retained. The identity key and its storage mode are fixed at creation. Changing keys or switching between local and external keys requires recreating the database, even if the key bytes match.
+
+`Server.MetricsHandler() http.Handler` serves the operational `/metrics` endpoint.
+Each `Server` owns its Prometheus registry; application traffic is instrumented
+automatically through `ServeHTTP`, independently of metrics serving.
 
 Assigned-task exports retain run/version identifiers, version hash, pilot/real mode, difficulty and policy metadata on every row. Neither authored task IDs nor semantic node paths are part of the blinded export. The owner-only key resolves arm/task codes; detailed events resolve node IDs.

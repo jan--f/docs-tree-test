@@ -110,6 +110,7 @@ func OpenWithOptions(dbPath string, assets fs.FS, publicURL string, options Opti
 		_ = db.Close()
 		return nil, err
 	}
+	s.metrics = newServerMetrics(s)
 	s.routes()
 	return s, nil
 }

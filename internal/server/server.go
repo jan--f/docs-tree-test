@@ -29,6 +29,8 @@ type Server struct {
 	origin         string
 	secure         bool
 	mux            *http.ServeMux
+	httpHandler    http.Handler
+	metrics        *serverMetrics
 	identityKey    []byte
 	limits         *rateLimiter
 	loginLimits    *loginLimiter
@@ -49,7 +51,7 @@ func problem(status int, text string) error { return &apiError{status, text} }
 type handler func(http.ResponseWriter, *http.Request) error
 
 func (s *Server) route(pattern string, h handler) {
-	s.mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+	s.handle(pattern, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := randomID()
 		w.Header().Set("X-Request-ID", id)
 		r = r.WithContext(context.WithValue(r.Context(), requestIDKey{}, id))
@@ -66,7 +68,7 @@ func (s *Server) route(pattern string, h handler) {
 		if err := h(w, r); err != nil {
 			writeError(w, err)
 		}
-	})
+	}))
 }
 
 func writeError(w http.ResponseWriter, err error) {
@@ -161,7 +163,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if s.secure {
 		w.Header().Set("Strict-Transport-Security", "max-age=31536000")
 	}
-	s.mux.ServeHTTP(w, r)
+	s.httpHandler.ServeHTTP(w, r)
 }
 
 func (s *Server) routes() {
@@ -193,7 +195,7 @@ func (s *Server) routes() {
 	s.route("GET /{$}", s.html("index.html"))
 	s.route("GET /admin", s.html("admin.html"))
 	s.route("GET /s/{slug}", s.html("participant.html"))
-	s.mux.HandleFunc("/assets/", func(w http.ResponseWriter, r *http.Request) {
+	s.handle("/assets/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			writeError(w, problem(405, "method not allowed"))
 			return
@@ -210,8 +212,9 @@ func (s *Server) routes() {
 		// new protocol is never paired with a five-minute-old browser controller.
 		w.Header().Set("Cache-Control", "no-cache")
 		http.FileServer(http.FS(s.assets)).ServeHTTP(w, r)
-	})
+	}))
 	s.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { writeError(w, problem(404, "not found")) })
+	s.httpHandler = s.metrics.instrument(s.mux)
 }
 
 func (s *Server) databaseBytes() int64 {

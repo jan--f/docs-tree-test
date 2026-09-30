@@ -276,6 +276,8 @@ func TestEnrollmentConcurrencyAndClosedResume(t *testing.T) {
 	if storedHash == clients[0].cookies[participantCookie].Value || len(storedHash) != 64 {
 		t.Fatal("raw bearer token was persisted")
 	}
+	assertCounter(t, e.s.metrics.sessionsEnrolled, 16)
+	assertCounter(t, second.metrics.sessionsEnrolled, 16)
 }
 
 func TestEventsAtomicFinishAndReceipts(t *testing.T) {
@@ -328,6 +330,8 @@ func TestEventsAtomicFinishAndReceipts(t *testing.T) {
 	if count(t, e.s, "SELECT COUNT(*) FROM events WHERE attempt_id=?", a.Attempt.ID) != 2 {
 		t.Fatal("failed finish committed final events")
 	}
+	assertCounter(t, e.s.metrics.eventsAccepted, 2)
+	assertCounter(t, e.s.metrics.attemptsFinished.WithLabelValues("selected"), 0)
 	request := finishBody(a, "finish-once", "selected", target, []Event{final, submit(4, target, 1200, "first", "selected")})
 	w := c.request("POST", "/api/public/test-run/finish", request)
 	if w.Code != 200 {
@@ -396,6 +400,15 @@ func TestEventsAtomicFinishAndReceipts(t *testing.T) {
 	if assigned != 6 || shown != 3 || correct != 1 || skipped != 1 || gaveUp != 1 || unreached != 3 {
 		t.Fatalf("inconsistent summaries: assigned=%d shown=%d correct=%d skipped=%d gave_up=%d unreached=%d", assigned, shown, correct, skipped, gaveUp, unreached)
 	}
+	// Rejected writes, duplicate events and command receipt replays must not
+	// inflate the committed activity counters.
+	assertCounter(t, e.s.metrics.sessionsEnrolled, 2)
+	assertCounter(t, e.s.metrics.sessionsCompleted, 1)
+	assertCounter(t, e.s.metrics.attemptsStarted, 3)
+	for _, outcome := range []string{"selected", "gave_up", "skipped"} {
+		assertCounter(t, e.s.metrics.attemptsFinished.WithLabelValues(outcome), 1)
+	}
+	assertCounter(t, e.s.metrics.eventsAccepted, 7)
 }
 
 func TestRestartSnapshotPinningAndBackup(t *testing.T) {
@@ -435,6 +448,9 @@ func TestRestartSnapshotPinningAndBackup(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reopened.Close()
+	assertCounter(t, reopened.metrics.sessionsEnrolled, 0)
+	assertCounter(t, reopened.metrics.attemptsStarted, 0)
+	assertCounter(t, reopened.metrics.eventsAccepted, 0)
 	c.s = reopened
 	after := call[Session](t, c, "GET", "/api/public/test-run/session", nil, 200)
 	if !reflect.DeepEqual(before, after) {

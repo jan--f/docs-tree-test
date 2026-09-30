@@ -301,7 +301,8 @@ umask 077
 ./bin/treetest import --db /var/lib/treetest/treetest.sqlite --identity-key-file /var/lib/treetest/identity.key --study studies/example
 ./bin/treetest serve --db /var/lib/treetest/treetest.sqlite \
   --identity-key-file /var/lib/treetest/identity.key \
-  --branding prometheus --listen 127.0.0.1:8080 --public-url https://study.example.org
+  --branding prometheus --listen 127.0.0.1:8080 --metrics-listen 127.0.0.1:9091 \
+  --public-url https://study.example.org
 ```
 
 The `identity-key` command creates a new random key in a `0600` file, never
@@ -339,6 +340,47 @@ docker run -d --name treetest --restart unless-stopped \
   serve --db /data/study.sqlite --identity-key-file /data/identity.key \
   --branding prometheus --trusted-proxies "$proxy_ip" --listen 0.0.0.0:8080 --public-url https://study.example.org
 ```
+
+### Prometheus metrics
+
+Enable a dedicated metrics listener with `serve --metrics-listen 127.0.0.1:9091`.
+It serves `GET /metrics` in Prometheus text or OpenMetrics format. The flag defaults
+to empty (disabled); the example systemd unit enables it on loopback. The listener
+is unauthenticated and intended for loopback or a private monitoring interface.
+Use [deploy/prometheus.yml](deploy/prometheus.yml) for a same-host scraper.
+
+```sh
+curl http://127.0.0.1:9091/metrics
+```
+
+For Docker with a host-local scraper, add `--metrics-listen 0.0.0.0:9091` to the
+serve command and `-p 127.0.0.1:9091:9091` to `docker run`.
+
+| Metric | Meaning |
+| --- | --- |
+| `treetest_http_requests_total` | Requests by `route`, `method`, and response `code`, including rejected requests. |
+| `treetest_http_request_duration_seconds` | Request latency histogram by `route` and `method`. |
+| `treetest_http_requests_in_flight` | Application requests currently being handled. |
+| `treetest_database_size_bytes` | Combined SQLite, WAL, and shared-memory file size. |
+| `treetest_sessions_enrolled_total` | New sessions committed. |
+| `treetest_sessions_completed_total` | Sessions that completed all tasks. |
+| `treetest_attempts_started_total` | New task attempts committed. |
+| `treetest_attempts_finished_total` | Finished attempts by `outcome`: `selected`, `gave_up`, or `skipped`. |
+| `treetest_events_accepted_total` | New events committed, including final submit events. |
+| `go_sql_*` | Connection pool usage and wait counters, with fixed `db_name="treetest"`. |
+| `go_*`, `process_*` | Standard Go runtime and process metrics. |
+
+HTTP methods are lowercase; unrecognized methods use `unknown`. Routes use fixed
+templates such as `/api/public/{slug}/finish`, with `unmatched` for unknown routes.
+Scrapes are excluded from application request metrics. Metric labels omit run,
+session, task, variant and participant identifiers, raw paths, query strings, and
+correctness. Scraping reads pool statistics and file sizes without querying study
+tables, so it remains responsive while the SQLite connection is busy.
+
+Activity counters record successful commits once, including when the response is
+lost; resumes, duplicate events, and command retries do not increment them again.
+Counters cover activity handled by this process and reset on restart. Use the
+admin reports for persistent study totals.
 
 ### Backups and restore
 

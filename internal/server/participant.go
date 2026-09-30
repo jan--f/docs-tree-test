@@ -204,6 +204,7 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) error {
 	if limitErr := s.limitParticipant(w, run.ID, identity, "join", false); limitErr != nil {
 		return limitErr
 	}
+	enrolledNew := false
 	if err != nil {
 		if e, ok := err.(*apiError); !ok || e.status != 404 {
 			return err
@@ -278,6 +279,7 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) error {
 		if _, err := tx.ExecContext(r.Context(), "UPDATE runs SET data_bytes=data_bytes+? WHERE id=?", a.StorageBytes, run.ID); err != nil {
 			return err
 		}
+		enrolledNew = true
 	}
 	result, err := makeSession(r.Context(), tx, a, snapshot)
 	if err != nil {
@@ -285,6 +287,9 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) error {
 	}
 	if err := tx.Commit(); err != nil {
 		return err
+	}
+	if enrolledNew {
+		s.metrics.sessionsEnrolled.Inc()
 	}
 	return respond(w, result)
 }
@@ -466,6 +471,7 @@ func (s *Server) start(w http.ResponseWriter, r *http.Request) error {
 	if err := tx.Commit(); err != nil {
 		return err
 	}
+	s.metrics.attemptsStarted.Inc()
 	data, err := marshal(result)
 	if err != nil {
 		return err
@@ -521,12 +527,14 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) error {
 	if attempt.Policy != snapshot.Policy {
 		return problem(409, "attempt policy does not match its frozen version")
 	}
+	previousSeq := attempt.NextSeq
 	if _, err := appendEvents(r.Context(), tx, a, snapshot, attempt, req.Events, nil); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return err
 	}
+	s.metrics.eventsAccepted.Add(float64(attempt.NextSeq - previousSeq))
 	return respond(w, map[string]int{"next_seq": attempt.NextSeq})
 }
 
@@ -596,6 +604,7 @@ func (s *Server) finish(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	previousSeq := attempt.NextSeq
 	events, err := appendEvents(r.Context(), tx, a, snapshot, attempt, req.Events, &finishSelection{req.Outcome, req.NodeID})
 	if err != nil {
 		return err
@@ -647,6 +656,11 @@ func (s *Server) finish(w http.ResponseWriter, r *http.Request) error {
 	}
 	if err := tx.Commit(); err != nil {
 		return err
+	}
+	s.metrics.eventsAccepted.Add(float64(attempt.NextSeq - previousSeq))
+	s.metrics.attemptsFinished.WithLabelValues(req.Outcome).Inc()
+	if result.Completed {
+		s.metrics.sessionsCompleted.Inc()
 	}
 	data, err := marshal(result)
 	if err != nil {

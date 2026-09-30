@@ -9,13 +9,11 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/jan--f/docs-tree-test/internal/server"
 	"github.com/jan--f/docs-tree-test/internal/study"
@@ -52,12 +50,13 @@ func run(args []string) error {
 	publicURL := flags.String("public-url", "http://127.0.0.1:8080", "External origin, including http:// or https://")
 	branding := flags.String("branding", server.BrandingPrometheus, "Visual branding preset: prometheus or neutral")
 	trustedProxies := flags.String("trusted-proxies", "127.0.0.1/32,::1/128", "Comma-separated immediate proxy IPs/CIDRs allowed to set X-Forwarded-For; empty trusts none")
-	var listen, studyDir, username, role, passwordFile, out, identityKeyFile, purgeRun *string
+	var listen, metricsListen, studyDir, username, role, passwordFile, out, identityKeyFile, purgeRun *string
 	var purgeOverdue, purgeConfirm *bool
 	identityKeyFile = flags.String("identity-key-file", "", "File containing a base64url 32-byte participant identity key")
 	switch args[0] {
 	case "serve":
 		listen = flags.String("listen", "127.0.0.1:8080", "HTTP listen address")
+		metricsListen = flags.String("metrics-listen", "", "Separate Prometheus HTTP listen address (e.g. 127.0.0.1:9091); empty disables metrics serving")
 	case "validate", "import":
 		studyDir = flags.String("study", "studies/example", "Directory containing study.json and Markdown trees")
 	case "user":
@@ -110,30 +109,10 @@ func run(args []string) error {
 	defer s.Close()
 	switch args[0] {
 	case "serve":
-		httpServer := &http.Server{
-			Addr: *listen, Handler: s, ReadHeaderTimeout: 10 * time.Second,
-			ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second,
-			IdleTimeout: 90 * time.Second, MaxHeaderBytes: 1 << 20,
-		}
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
-		shutdownDone := make(chan struct{})
-		go func() {
-			defer close(shutdownDone)
-			<-ctx.Done()
-			deadline, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-			defer cancel()
-			if err := httpServer.Shutdown(deadline); err != nil {
-				log.Printf("HTTP shutdown: %v", err)
-			}
-		}()
-		log.Printf("treetest %s listening on %s (public origin %s)", version, *listen, *publicURL)
-		err := httpServer.ListenAndServe()
-		stop()
-		<-shutdownDone
-		if !errors.Is(err, http.ErrServerClosed) {
-			return err
-		}
+		log.Printf("treetest %s (public origin %s)", version, *publicURL)
+		return serve(ctx, s, *listen, *metricsListen)
 	case "user":
 		password := os.Getenv("TREETEST_PASSWORD")
 		if *passwordFile != "" {
