@@ -31,6 +31,15 @@ application before removing a database and its `-wal`/`-shm` files, then repeat
 account setup and study import. If reusing study link names, also clear the old
 participant progress from the development browser's site storage.
 
+For a separate local development instance, run `make dev`. It builds the app,
+creates an owner on first use, imports `studies/example`, and serves on
+`http://127.0.0.1:8080`. The owner password is printed before the server starts
+and saved with mode `0600` in ignored `data/dev-owner-password`; retrieve it
+later with `make dev-password`. The instance uses `data/dev.sqlite`, not the
+`data/study.sqlite` from the commands above. Restarts reuse the password and
+database without resetting the owner. Keep this local password and database
+private; if one is missing, `make dev` refuses to replace the other.
+
 The `user` command prints a generated password. To choose your own, supply
 `--password-file /path/to/password` or the `TREETEST_PASSWORD` environment
 variable. Repeating the command resets that account's credentials.
