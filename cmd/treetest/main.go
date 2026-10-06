@@ -50,8 +50,8 @@ func run(args []string) error {
 	publicURL := flags.String("public-url", "http://127.0.0.1:8080", "External origin, including http:// or https://")
 	branding := flags.String("branding", server.BrandingPrometheus, "Visual branding preset: prometheus or neutral")
 	trustedProxies := flags.String("trusted-proxies", "127.0.0.1/32,::1/128", "Comma-separated immediate proxy IPs/CIDRs allowed to set X-Forwarded-For; empty trusts none")
-	var listen, metricsListen, studyDir, username, role, passwordFile, out, identityKeyFile, purgeRun *string
-	var purgeOverdue, purgeConfirm *bool
+	var listen, metricsListen, studyDir, username, role, passwordFile, out, identityKeyFile, purgeRun, removeVersion *string
+	var purgeOverdue, purgeConfirm, removeConfirm *bool
 	identityKeyFile = flags.String("identity-key-file", "", "File containing a base64url 32-byte participant identity key")
 	switch args[0] {
 	case "serve":
@@ -59,6 +59,10 @@ func run(args []string) error {
 		metricsListen = flags.String("metrics-listen", "", "Separate Prometheus HTTP listen address (e.g. 127.0.0.1:9091); empty disables metrics serving")
 	case "validate", "import":
 		studyDir = flags.String("study", "studies/example", "Directory containing study.json and Markdown trees")
+	case "list":
+	case "remove":
+		removeVersion = flags.String("version", "", "Published study version ID to remove")
+		removeConfirm = flags.Bool("confirm", false, "Permanently remove this unused study version")
 	case "user":
 		username = flags.String("username", "owner", "Account name")
 		role = flags.String("role", "owner", "owner or analyst")
@@ -89,6 +93,9 @@ func run(args []string) error {
 		}
 		fmt.Printf("Valid study: %s\nSHA-256: %s\nVariants: %d; tasks: %d; panels: %d; tasks/session: %d\n", bundle.Config.Title, snapshot.Hash, len(bundle.Config.Variants), len(bundle.Config.Tasks), len(bundle.Config.Panels), bundle.Config.TasksPerSession)
 		return nil
+	}
+	if args[0] == "remove" && *removeVersion == "" {
+		return errors.New("remove requires --version")
 	}
 	u, err := url.Parse(*publicURL)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
@@ -143,6 +150,33 @@ func run(args []string) error {
 			return err
 		}
 		fmt.Printf("Published version: %s\nCreate a pilot run in /admin to try it.\n", id)
+	case "list":
+		studies, err := s.ListStudies(context.Background())
+		if err != nil {
+			return err
+		}
+		if len(studies) == 0 {
+			fmt.Println("No published study versions.")
+			break
+		}
+		fmt.Println("ID\tSLUG\tTITLE\tRUNS\tHASH")
+		for _, study := range studies {
+			fmt.Printf("%s\t%s\t%q\t%d\t%s\n", study.ID, study.Slug, study.Title, study.Runs, study.Hash)
+		}
+	case "remove":
+		study, err := s.GetStudy(context.Background(), *removeVersion)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%s (%s, %q): %d run(s)\n", study.ID, study.Slug, study.Title, study.Runs)
+		if !*removeConfirm {
+			fmt.Println("Dry run only. Re-run with --confirm to permanently remove this published version. Versions with runs cannot be removed.")
+			break
+		}
+		if err := s.RemoveStudy(context.Background(), *removeVersion); err != nil {
+			return err
+		}
+		fmt.Println("Removed published study version:", *removeVersion)
 	case "backup":
 		if *out == "" {
 			return fmt.Errorf("backup requires --out")
@@ -236,6 +270,8 @@ Usage: treetest <command> [flags]
   user          Create/reset an owner or analyst account (prints a generated password)
   validate      Validate a study directory without opening a database
   import        Publish a validated study directory into the database
+  list          List published study versions and their run counts
+  remove        Dry-run or confirm removal of a version with no runs
   backup        Create a consistent SQLite backup
   identity-key  Generate a new external participant identity key without opening a database
   purge         Dry-run or confirm manual deletion of closed-run participant data

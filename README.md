@@ -22,6 +22,7 @@ go build -trimpath -o bin/treetest ./cmd/treetest
 ./bin/treetest validate --study studies/example
 ./bin/treetest user --db data/study.sqlite --username owner --role owner
 ./bin/treetest import --db data/study.sqlite --study studies/example
+./bin/treetest list --db data/study.sqlite
 ./bin/treetest serve --db data/study.sqlite --branding prometheus --public-url http://127.0.0.1:8080
 ```
 
@@ -143,6 +144,21 @@ the policy as well as the content; an unsupported policy cannot silently switch
 to a newer algorithm. Changing content produces a new version. Runs and
 existing participants stay pinned to the version they started with. Closing or
 pausing enrollment prevents new enrollments while allowing existing ones to finish.
+
+To inspect imported/published study versions and remove one that has no runs:
+
+```sh
+./bin/treetest list --db data/study.sqlite
+./bin/treetest remove --db data/study.sqlite --version VERSION_ID
+./bin/treetest remove --db data/study.sqlite --version VERSION_ID --confirm
+```
+
+`list` shows version IDs, slugs, titles, run counts, and hashes (not answer keys).
+`remove` is a dry run unless `--confirm` is supplied. It deletes only the selected
+published version, not drafts or source files, and refuses any version referenced
+by a run, even a closed or purged one. Use `purge` for closed-run participant data;
+neither command removes backups. For databases using an external identity key,
+pass `--identity-key-file` to these commands too.
 
 ## Participant behavior and recording
 
