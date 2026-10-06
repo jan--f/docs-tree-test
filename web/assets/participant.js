@@ -17,6 +17,7 @@ let saved = {};
 let nodes = new Map();
 let currentNodeId = null;
 let selectedId = null;
+let collapsedNodes = new Set();
 let busy = false;
 let blocked = false;
 let active = false;
@@ -137,6 +138,7 @@ async function retrySync() {
 }
 
 function acceptSession(value, {resuming = false, skipTree = false} = {}) {
+  if (session?.attempt?.id !== value.attempt?.id) collapsedNodes = new Set();
   session = value;
   nodes = indexTree(session.tree || []);
   currentNodeId = null;
@@ -277,7 +279,7 @@ function renderLanding() {
     el('h2', {}, 'What you’ll do'),
     el('ol', {class: 'steps'},
       el('li', {}, 'Read a series of short situations. Start each one when you’re ready to browse.'),
-      el('li', {}, 'Explore the groups and page titles. You can go back or return to the top at any time.'),
+      el('li', {}, 'Browse the expanded menu and page titles. You can hide or show submenus at any time.'),
       el('li', {}, 'Choose the page where you would expect to find the answer, then confirm your choice. You can also say you can’t find it or skip an unclear task.')),
     el('div', {class: 'inline-note'}, el('span', {class: 'note-icon', 'aria-hidden': 'true'}, '↳'), el('div', {}, el('h2', {}, 'Try the controls first'), el('p', {}, 'A short, unrelated library example. Practice stays in your browser and is not part of your study responses.'), button('Open practice', () => renderPractice(), 'secondary', {disabled: busy}))),
     available ? el('form', {onsubmit: event => { event.preventDefault(); if (!busy) join(); }},
@@ -309,13 +311,36 @@ function render() {
     return;
   }
   const tree = treeView({tree: session.tree, nodes, current: currentNodeId, selected: selectedId, disabled: busy || blocked,
-    navigate: guarded((id, type) => { record(type, id); currentNodeId = id; selectedId = null; render(); document.getElementById('tree-location')?.focus(); announce(id ? `Opened ${nodes.get(id).node.label}` : 'At the top of the tree'); }),
-    choose: guarded(id => { record('select', id); selectedId = id; render(); document.getElementById('confirm-selection')?.focus(); announce(`Selected ${nodes.get(id).node.label}. Confirm your choice to submit.`); }),
+    navigate: guarded((id, type) => { moveTo(id, type); selectedId = null; render(); document.getElementById('tree-location')?.focus(); announce(id ? `Opened ${nodes.get(id).node.label}` : 'At the top of the tree'); }),
+    choose: guarded(id => { if (id !== currentNodeId) moveTo(nodes.get(id).parents.at(-1) || null); record('select', id); selectedId = id; render(); document.getElementById('confirm-selection')?.focus(); announce(`Selected ${nodes.get(id).node.label}. Confirm your choice to submit.`); }),
+    collapsed: collapsedNodes, toggle: id => { if (collapsedNodes.has(id)) collapsedNodes.delete(id); else collapsedNodes.add(id); },
   });
   mount(app, progress(), prompt, tree,
     selectedId && selectionPanel(nodes, selectedId, () => finish('selected', selectedId), busy || blocked),
     el('div', {class: 'task-exits'}, button('I can’t find it', guarded(requestGiveUp), 'quiet', {disabled: busy || blocked}), button('This task is unclear · skip', guarded(requestSkip), 'quiet', {disabled: busy || blocked})),
-    el('p', {class: 'help'}, 'Groups contain more choices. Pages can be selected; some pages also contain other pages.'));
+    el('p', {class: 'help'}, 'Submenus start expanded. You can hide or show them; select a page when you find where you would look.'));
+}
+
+// The visible menu can show descendants of the current location. Keep the
+// recorded path valid when someone selects a page directly from a submenu.
+function moveTo(id, type) {
+  if (type === 'root' || type === 'back') {
+    record(type, id);
+    currentNodeId = id;
+    return;
+  }
+  const from = currentNodeId ? [...nodes.get(currentNodeId).parents, currentNodeId] : [];
+  const to = id ? [...nodes.get(id).parents, id] : [];
+  let common = 0;
+  while (common < from.length && common < to.length && from[common] === to[common]) common++;
+  if (common < from.length) {
+    currentNodeId = from[common - 1] || null;
+    record('back', currentNodeId);
+  }
+  for (const next of to.slice(common)) {
+    record('enter', next);
+    currentNodeId = next;
+  }
 }
 
 function selectionPanel(nodeMap, id, submit, disabled = false) {
@@ -324,9 +349,8 @@ function selectionPanel(nodeMap, id, submit, disabled = false) {
   return el('section', {class: 'selection-card', 'aria-label': 'Confirm your selected page'}, el('p', {}, 'Your selected page'), el('p', {class: 'selection-path'}, path), el('div', {class: 'actions'}, button('Confirm this page', submit, 'primary', {id: 'confirm-selection', disabled}), el('span', {class: 'help'}, 'Or keep browsing to choose another page.')));
 }
 
-function treeView({tree, nodes: nodeMap, current, selected, disabled, navigate, choose, practice = false}) {
+function treeView({tree, nodes: nodeMap, current, selected, disabled, navigate, choose, practice = false, collapsed = new Set(), toggle = () => {}}) {
   const entry = current ? nodeMap.get(current) : null;
-  const children = entry ? entry.node.children || [] : tree;
   const parents = entry ? entry.parents : [];
   const crumbs = [...parents, ...(current ? [current] : [])];
   const navigateTo = (id, type) => async () => {
@@ -337,16 +361,31 @@ function treeView({tree, nodes: nodeMap, current, selected, disabled, navigate, 
     if (disabled) return;
     try { await choose(id); } catch (error) { showError(error); render(); }
   };
+  function items(nodes) {
+    return el('ul', {class: 'tree-list'}, nodes.map(node => {
+      const hasChildren = Boolean(node.children?.length);
+      const isCollapsed = collapsed.has(node.id);
+      return el('li', {}, el('div', {class: `tree-row${selected === node.id ? ' is-selected' : ''}`}, el('span', {class: 'node-icon', 'aria-hidden': 'true'}, node.selectable ? '▤' : '▱'), el('div', {class: 'node-info'}, el('span', {class: 'node-label'}, node.label), el('span', {class: 'node-meta'}, node.selectable ? hasChildren ? 'Page · contains more items' : 'Page' : 'Group')),
+        el('div', {class: 'node-actions'}, hasChildren && button(isCollapsed ? 'Show' : 'Hide', () => {
+          const wasCollapsed = collapsed.has(node.id);
+          toggle(node.id);
+          const subtree = document.getElementById(`subtree-${node.id}`);
+          subtree.hidden = !wasCollapsed;
+          const control = document.getElementById(`toggle-${node.id}`);
+          control.setAttribute('aria-expanded', String(wasCollapsed));
+          control.textContent = wasCollapsed ? 'Hide' : 'Show';
+          control.setAttribute('aria-label', `${wasCollapsed ? 'Hide' : 'Show'} ${node.label} submenu`);
+        }, 'quiet', {id: `toggle-${node.id}`, disabled, 'aria-label': `${isCollapsed ? 'Show' : 'Hide'} ${node.label} submenu`, 'aria-expanded': String(!isCollapsed), 'aria-controls': `subtree-${node.id}`}),
+        node.selectable && button(selected === node.id ? 'Selected' : 'Select', chooseNode(node.id), 'secondary', {disabled, 'aria-label': `Select ${node.label}`, 'aria-pressed': selected === node.id ? 'true' : 'false'}), !hasChildren && !node.selectable && el('span', {class: 'help'}, 'Empty group'))),
+      hasChildren && el('div', {id: `subtree-${node.id}`, hidden: isCollapsed}, items(node.children)));
+    }));
+  }
   return el('section', {class: 'tree-panel', 'aria-label': practice ? 'Practice navigation' : 'Documentation navigation'},
     el('div', {class: 'tree-toolbar'}, button('← Back', navigateTo(parents.at(-1) || null, 'back'), 'secondary small', {disabled: disabled || !current}), button('↟ Top level', navigateTo(null, 'root'), 'quiet small', {disabled: disabled || !current}), !practice && el('span', {class: 'save-status', id: 'save-status', role: 'status'}, saveMessage)),
     el('nav', {class: 'breadcrumbs', 'aria-label': 'Your location'}, el('ol', {}, el('li', {}, current ? button('Top level', navigateTo(null, 'root'), 'quiet', {disabled}) : el('span', {'aria-current': 'location'}, 'Top level')), crumbs.map(id => el('li', {}, id === current ? el('span', {'aria-current': 'location'}, nodeMap.get(id).node.label) : button(nodeMap.get(id).node.label, navigateTo(id, 'back'), 'quiet', {disabled}))))),
-    el('div', {class: 'tree-location'}, el('h2', {id: 'tree-location', tabindex: '-1'}, entry ? entry.node.label : 'Explore the navigation'), !children.length && el('p', {class: 'help'}, 'This page has no further items. Select it here, or go back to keep exploring.')),
+    el('div', {class: 'tree-location'}, el('h2', {id: 'tree-location', tabindex: '-1'}, entry ? entry.node.label : 'Explore the navigation'), entry && !entry.node.children?.length && el('p', {class: 'help'}, 'This page has no further items. Select it here, or go back to keep exploring.')),
     entry?.node.selectable && el('div', {class: 'current-page'}, el('div', {}, el('p', {}, 'This is also a selectable page.'), el('span', {class: 'help'}, entry.node.label)), button(selected === current ? 'Selected' : 'Select this page', chooseNode(current), 'secondary', {disabled, 'aria-pressed': selected === current ? 'true' : 'false'})),
-    el('ul', {class: 'tree-list'}, children.map(node => {
-      const hasChildren = Boolean(node.children?.length);
-      return el('li', {}, el('div', {class: `tree-row${selected === node.id ? ' is-selected' : ''}`}, el('span', {class: 'node-icon', 'aria-hidden': 'true'}, node.selectable ? '▤' : '▱'), el('div', {class: 'node-info'}, el('span', {class: 'node-label'}, node.label), el('span', {class: 'node-meta'}, node.selectable ? hasChildren ? 'Page · contains more items' : 'Page' : 'Group')),
-        el('div', {class: 'node-actions'}, hasChildren && button('Explore →', navigateTo(node.id, 'enter'), 'quiet', {disabled, 'aria-label': `Explore ${node.label}`}), node.selectable && button(selected === node.id ? 'Selected' : 'Select', chooseNode(node.id), 'secondary', {disabled, 'aria-label': `Select ${node.label}`, 'aria-pressed': selected === node.id ? 'true' : 'false'}), !hasChildren && !node.selectable && el('span', {class: 'help'}, 'Empty group'))));
-    })));
+    items(entry ? entry.node.children || [] : tree));
 }
 
 function renderPractice() {
@@ -358,10 +397,12 @@ function renderPractice() {
   const practiceNodes = indexTree(tree);
   let current = null;
   let selected = null;
+  const collapsed = new Set();
   function paint() {
-    mount(app, el('div', {class: 'practice-banner'}, 'Practice only · Nothing in this activity is saved or submitted.'), el('p', {class: 'eyebrow'}, 'Get comfortable with the controls'), el('h1', {}, 'Try finding a library page'), el('p', {class: 'lede'}, 'Imagine you want to check when the library is open. Explore a group, select a page, and confirm your choice.'), treeView({tree, nodes: practiceNodes, current, selected, practice: true, disabled: false,
+    mount(app, el('div', {class: 'practice-banner'}, 'Practice only · Nothing in this activity is saved or submitted.'), el('p', {class: 'eyebrow'}, 'Get comfortable with the controls'), el('h1', {}, 'Try finding a library page'), el('p', {class: 'lede'}, 'Imagine you want to check when the library is open. Browse the menu, select a page, and confirm your choice.'), treeView({tree, nodes: practiceNodes, current, selected, practice: true, disabled: false,
       navigate: (id) => { current = id; selected = null; paint(); document.getElementById('tree-location').focus(); },
       choose: id => { selected = id; paint(); document.getElementById('confirm-selection').focus(); },
+      collapsed, toggle: id => { if (collapsed.has(id)) collapsed.delete(id); else collapsed.add(id); },
     }), selected && selectionPanel(practiceNodes, selected, () => {
       app.replaceChildren(el('div', {class: 'practice-banner'}, 'Practice only · No response was saved.'), el('h1', {}, 'You’ve tried the controls'), el('p', {class: 'lede'}, 'In the study, you’ll use these same controls to choose where you would look. You can explore freely before confirming each choice.'), el('div', {class: 'actions'}, button('Return to study instructions', () => { renderLanding(); focusHeading(); }, 'primary'), button('Practice again', renderPractice)));
       focusHeading();

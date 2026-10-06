@@ -59,8 +59,9 @@ For browser integration, check:
    bundle, validate its previews/mappings, save, publish, and create a
    pilot run. Open enrollment and follow its participant link.
 2. Use the practice tree before joining. Complete selected, cannot-find, and
-   comprehension-skip tasks. Check the page-with-children controls, breadcrumbs,
-   and keyboard focus at a mobile-width viewport.
+   comprehension-skip tasks. Check that submenus start expanded, can be hidden
+   and reopened, and permit direct page selection. Check the page-with-children
+   controls, breadcrumbs, and keyboard focus at a mobile-width viewport.
 3. Disconnect while browsing and while submitting; reload and reconnect. Check
    the saved location and that a lost finish response advances exactly once.
 4. Open the same study in a second tab and check the paused/reload conflict UI.

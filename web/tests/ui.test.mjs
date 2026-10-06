@@ -65,6 +65,42 @@ const firstEvent = {id: 'first', seq: 1, type: 'tree_shown', elapsed_ms: 200, ep
 let moduleID = 0;
 async function loadParticipant() { await import(`../assets/participant.js?test=${moduleID++}`); }
 
+test('documentation submenus start expanded and direct nested selection records a valid path', async () => {
+  const {storage} = environment('/s/expanded');
+  const expandedTree = [...tree, {id: 'other', label: 'Reference', selectable: false, children: [{id: 'q', label: 'API', selectable: true, children: []}]}];
+  let final;
+  globalThis.fetch = async (path, options = {}) => {
+    if (path === '/api/public/expanded') return json({title: 'Study', status: 'open', mode: 'real'});
+    if (path.endsWith('/session')) return json({...session(0, {id: 'attempt', next_seq: 1, events: []}), tree: expandedTree});
+    if (path.endsWith('/finish')) { final = JSON.parse(options.body); return json(session(1)); }
+    throw new Error(`Unexpected endpoint ${path}`);
+  };
+  await loadParticipant();
+  await waitFor(() => document.getElementById('subtree-g'));
+  assert.equal(document.body.querySelectorAll('button').some(node => node.getAttribute('aria-label')?.startsWith('Explore ')), false);
+  assert.equal(document.getElementById('subtree-g').hidden, false);
+  assert.equal(document.getElementById('subtree-p').hidden, false);
+  assert.equal(byLabel('Hide Guides submenu').getAttribute('aria-expanded'), 'true');
+  await byLabel('Hide Guides submenu').click();
+  assert.equal(document.getElementById('subtree-g').hidden, true);
+  await byLabel('Show Guides submenu').click();
+  assert.equal(document.getElementById('subtree-g').hidden, false);
+  await byLabel('Select Invites').click();
+  assert.ok(document.body.textContent.includes('Guides / Access / Invites'));
+  assert.deepEqual(JSON.parse(storage.get('tree-study:v1:expanded')).events.map(event => [event.type, event.node_id]),
+    [['tree_shown', undefined], ['enter', 'g'], ['enter', 'p'], ['select', 'leaf']]);
+  await byText('↟ Top level').click();
+  await byLabel('Hide Guides submenu').click();
+  await byLabel('Select API').click();
+  await byText('↟ Top level').click();
+  assert.equal(document.getElementById('subtree-g').hidden, true);
+  await byLabel('Show Guides submenu').click();
+  await byLabel('Select Invites').click();
+  await byText('Confirm this page').click();
+  assert.deepEqual(final.events.map(event => [event.type, event.node_id]),
+    [['tree_shown', undefined], ['enter', 'g'], ['enter', 'p'], ['select', 'leaf'], ['root', undefined], ['enter', 'other'], ['select', 'q'], ['root', undefined], ['enter', 'g'], ['enter', 'p'], ['select', 'leaf'], ['submit', 'leaf']]);
+});
+
 test('practice does not enroll; lost finish acknowledgment is replayed byte-for-byte after reload', async () => {
   const {storage} = environment('/s/example');
   let current;
@@ -89,7 +125,7 @@ test('practice does not enroll; lost finish acknowledgment is replayed byte-for-
   await loadParticipant();
   await waitFor(() => document.body.textContent.includes('Begin study'));
   await byText('Open practice').click();
-  await byLabel('Explore Visit the library').click();
+  assert.equal(document.body.querySelectorAll('button').some(node => node.getAttribute('aria-label')?.startsWith('Explore ')), false);
   await byLabel('Select Opening hours').click();
   await byText('Confirm this page').click();
   assert.deepEqual(requests, ['/api/public/example', '/api/public/example/session']);
@@ -98,7 +134,6 @@ test('practice does not enroll; lost finish acknowledgment is replayed byte-for-
   await form.dispatch('submit');
   await waitFor(() => document.body.textContent.includes('Start exploring'));
   await byText('Start exploring').click();
-  await byLabel('Explore Guides').click();
   await byLabel('Select Access').click();
   await byText('Confirm this page').click();
   assert.ok(document.body.textContent.includes('Retry saving response'));
@@ -157,7 +192,7 @@ test('sequence conflict pauses navigation and does not schedule repeated sends',
   document.visibilityState = 'hidden';
   await document.dispatch('visibilitychange');
   await waitFor(() => document.body.textContent.includes('Navigation is paused'));
-  assert.equal(byLabel('Explore Guides').disabled, true);
+  assert.equal(byLabel('Select Access').disabled, true);
   assert.equal(checkpoints, 1);
   assert.ok(JSON.parse(storage.get('tree-study:v1:conflict')).events.length > 0);
   await document.dispatch('visibilitychange');
@@ -252,8 +287,6 @@ test('confirmation freezes terminal timing before an in-flight checkpoint and re
   };
   await loadParticipant();
   await waitFor(() => document.body.textContent.includes('Explore the navigation'));
-  clock = 1010;
-  await byLabel('Explore Guides').click();
   clock = 1020;
   await byLabel('Select Access').click();
   clock = 1040;

@@ -96,7 +96,6 @@ try {
   await participant.text('Begin study');
   await participant.click('Open practice');
   await participant.text('Try finding a library page');
-  await participant.evaluate(`document.querySelector('[aria-label="Explore Visit the library"]').click()`);
   await participant.evaluate(`document.querySelector('[aria-label="Select Opening hours"]').click()`);
   await participant.click('Confirm this page');
   await participant.text('You’ve tried the controls');
@@ -106,12 +105,12 @@ try {
   await participant.text('Task 1 of 6');
   await participant.click('Start exploring');
   await participant.text('Explore the navigation');
+  assert.equal(await participant.evaluate(`document.querySelector('.tree-list [id^="subtree-"]:not([hidden]) .tree-row') !== null`), true, 'documentation submenus did not start expanded');
   assert.equal(await participant.evaluate('document.documentElement.scrollWidth <= innerWidth + 1'), true, 'mobile horizontal overflow');
   await participant.screenshot('participant-mobile');
 
   // Browse with the network interrupted, then restore and reload the same task.
   await participant.send('Network.emulateNetworkConditions', {offline: true, latency: 0, downloadThroughput: -1, uploadThroughput: -1});
-  await participant.evaluate(`document.querySelector('[aria-label^="Explore "]').click()`);
   await participant.wait(`Boolean(document.querySelector('[aria-label^="Select "]'))`);
   await participant.evaluate(`document.querySelector('[aria-label^="Select "]').click()`);
   await participant.text('Confirm this page');
